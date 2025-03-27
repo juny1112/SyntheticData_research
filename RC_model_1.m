@@ -23,7 +23,7 @@ function V_est = RC_model_1(X, t_vec, I_vec, dt)
             Vrc1 = R1 * I_vec(1) * (1 - alpha1);
         else
             % 이후는 기존 공식
-            Vrc1 = Vrc1*alpha1 + R1*(1 - alpha1)*I_vec(k-1);
+            Vrc1 = Vrc1*alpha1 + R1*(1 - alpha1)*I_vec(k);
         end
 
         % (4) 최종 전압
