@@ -7,7 +7,6 @@ data = readtable(filename);
 % parameters
 t_vec = data.time; %[sec]
 I_vec = data.scaled_current; %[Ah]
-dt = 1; % 엑셀파일에 1초 간격으로 찍힘, 나중에 함수에서 계산하는걸로 빼기
 X = [0.001 0.001 10]; % 임의로 [R0[ohm], R1[ohm], tau1[sec]] 설정
 
 % Plot current (확인용)
@@ -20,7 +19,7 @@ grid on;
 
 
 %% 1RC model -> 전압 데이터 생성
-V_est = RC_model_1(X, t_vec, I_vec, dt);
+V_est = RC_model_1(X, t_vec, I_vec);
 save('UDDS_data.mat', 't_vec', 'I_vec', 'V_est') %t_vec, I_vec, V_est 저장
 
 % Plot voltage (확인용)

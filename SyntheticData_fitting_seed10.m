@@ -12,7 +12,6 @@ noisedata = load(syntheticdata);  % V_SD1 ~ V_SD10가 포함된 구조체 불러
 
 t = t_vec; 
 I = I_vec;
-dt = 1; %[sec]
 
 vSD_fields = fieldnames(noisedata);  % noisedata에 있는 모든 필드명을 가져옴
 numseeds = length(vSD_fields);       % 필드의 개수가 곧 seed 개수
@@ -42,7 +41,7 @@ for i = 1:numseeds
     fieldname = vSD_fields{i};
     V_SD = noisedata.(fieldname);
     
-    para_hat = fmincon(@(para)RMSE_1RC(V_SD,para,t,I,dt),para0,[],[],[],[],lb,ub,[],options);    
+    para_hat = fmincon(@(para)RMSE_1RC(V_SD,para,t,I),para0,[],[],[],[],lb,ub,[],options);    
     % fmincon 함수는 cost함수(RMSE_1RC)를 최소화하는 파라미터(para)를 찾음
     % @(para)RMSE_1RC(V_SD,para,t,I,dt): 익명함수 = 최적화 대상함수
 
@@ -70,9 +69,9 @@ disp('각 파라미터의 평균:');
 disp(mean_para);
 
 %% cost funtion; RMSE (weight 무시)
-function cost = RMSE_1RC(data,para,t,I,dt)
+function cost = RMSE_1RC(data,para,t,I)
     % this is a cost function to be minimized
-    model = RC_model_1(para, t, I, dt);
+    model = RC_model_1(para, t, I);
     cost = sqrt(mean((data - model).^2)); % RMSE error (data = V_SD; model = 최적화한 para 적용한 V_est)
 end
 
