@@ -2,6 +2,7 @@ clear; clc; close all;
 
 %% load driving data
 filename = 'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE\udds_unit_time_scaled_current.xlsx';
+
 data = readtable(filename);
 
 % parameters
