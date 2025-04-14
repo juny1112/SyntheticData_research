@@ -26,11 +26,10 @@ function V_est = RC_model_2(X, t_vec, I_vec)
         alpha1 = exp(-dt(k)/tau1);
         alpha2 = exp(-dt(k)/tau2);
 
-
         if k == 1
-            % k-1번째 = 0번째 -> Vrc(0)=0, I(0)=I(1) 이라고 가정
-            Vrc1 = R1 * I_vec(1) * (1 - alpha1);
-            Vrc2 = R2 * I_vec(1) * (1 - alpha2);
+            % k-1번째 = 0번째 (RC에 대한 전압강하 없음)
+            Vrc1 = 0;
+            Vrc2 = 0;
         else
             % 이후는 기존 공식
             Vrc1 = Vrc1*alpha1 + R1*(1 - alpha1)*I_vec(k-1);
