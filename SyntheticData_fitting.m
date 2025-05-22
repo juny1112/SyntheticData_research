@@ -1,11 +1,11 @@
 clear; clc; close all
 
 %% load data
-% raw_profile = 'pulse_data.mat';
-% syntheticdata = 'noise.mat';
-raw_profile = 'UDDS_data.mat';
+raw_profile = 'pulse_data.mat';
+syntheticdata = 'noise.mat';
+% raw_profile = 'UDDS_data.mat';
 % syntheticdata = 'noise_UDDS.mat'; 
-syntheticdata = 'noise_UDDS_seed10.mat'; % seed 10개 준 합성데이터
+% syntheticdata = 'noise_UDDS_seed10.mat'; % seed 10개 준 합성데이터
 
 load(raw_profile)
 load(syntheticdata)
@@ -33,13 +33,13 @@ options = optimset('display','iter','MaxIter',400,'MaxFunEvals',1e5,...
     % 'TolX',1e-8: para값 변화가 e-8보다 작아지면 종료
     % 'FinDiffType','central': 수치 미분 계산시 central differential 사용(보다 정확한 기울기 제공해줌)
 
-para_hat = fmincon(@(para)RMSE_1RC(V_SD,para,t,I,dt),para0,[],[],[],[],lb,ub,[],options);    
+para_hat = fmincon(@(para)RMSE_1RC(V_SD,para,t,I),para0,[],[],[],[],lb,ub,[],options);    
     % fmincon 함수는 cost함수(RMSE_1RC)를 최소화하는 파라미터(para)를 찾음
     % @(para)RMSE_1RC(V_SD,para,t,I,dt): 익명함수 = 최적화 대상함수
 
 %% present result
-V_0 = RC_model_1(para0, t, I, dt);
-V_hat = RC_model_1(para_hat, t, I, dt);
+V_0 = RC_model_1(para0, t, I);
+V_hat = RC_model_1(para_hat, t, I);
 
 figure;
 plot(t,V_SD, '-k', LineWidth=1.5); hold on
@@ -52,9 +52,9 @@ xlabel('Time (sec)'); ylabel('Voltage [V]');
 title('Synthetic Data Fitting');
 
 %% cost funtion; RMSE (weight 무시)
-function cost = RMSE_1RC(data,para,t,I,dt)
+function cost = RMSE_1RC(data,para,t,I)
     % this is a cost function to be minimized
-    model = RC_model_1(para, t, I, dt);
+    model = RC_model_1(para, t, I);
     cost = sqrt(mean((data - model).^2)); % RMSE error (data = V_SD; model = 최적화한 para 적용한 V_est)
 end
 

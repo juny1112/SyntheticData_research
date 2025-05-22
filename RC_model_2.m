@@ -1,4 +1,4 @@
-%% 2RC model function
+% 2RC model function
 
 function V_est = RC_model_2(X, t_vec, I_vec)
     

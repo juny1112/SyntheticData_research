@@ -22,13 +22,13 @@ I_vec(idx_pulse) = 1;
 figure;
 plot(t_vec, I_vec, 'r-');
 xlabel('Time(sec)');
-ylabel('Current(C)');
+ylabel('Current(A)');
 title('pulse data');
 grid on;
 
 
 %% 1RC model -> 전압 데이터 생성
-V_est = RC_model_1(X, t_vec, I_vec, dt);
+V_est = RC_model_1(X, t_vec, I_vec);
 save('pulse_data.mat', 't_vec', 'I_vec', 'V_est') %t_vec, I_vec, V_est 저장
 
 % Plot voltage (확인용)
