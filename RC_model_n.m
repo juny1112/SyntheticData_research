@@ -1,7 +1,7 @@
 % nRC model function
 
 function V_est = RC_model_n(X, t_vec, I_vec, n)
-    % parameters X = [R0, R1 … Rn, tau1 … taun]  ← 길이 = 1 + 2n
+    % parameters X = [R0, R1 … Rn, tau1 … taun]  ←  (1 X 1+2n)
     R0   = X(1);
     R    = X(2 : n+1);   
     tau  = X(n+2 : 2*n + 1);

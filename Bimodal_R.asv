@@ -6,7 +6,7 @@ function [theta, tau, r1, r2, r_tot, R] = Bimodal_R(n, tau_min, tau_max, mu1, si
 %   centered at μ1, μ2 with standard deviations σ1, σ2.  Each mode’s total
 %   area (∑ R·Δθ) is scaled to mode1 (Ω) and mode2 (Ω), respectively.
 %
-% Inputs:
+%   Inputs:
 %   n        – number of τ points (positive integer)
 %   tau_min  – minimum τ (positive scalar)
 %   tau_max  – maximum τ (positive scalar > tau_min)
@@ -17,7 +17,7 @@ function [theta, tau, r1, r2, r_tot, R] = Bimodal_R(n, tau_min, tau_max, mu1, si
 %   mode1    – total area (Ω) assigned to mode 1, e.g. 0.001 for 1 mΩ
 %   mode2    – total area (Ω) assigned to mode 2, e.g. 0.001 for 1 mΩ
 %
-% Outputs:
+%   Outputs:
 %   theta    – (n×1) vector of θ_i = ln(τ_i)
 %   tau      – (n×1) vector of logarithmically spaced τ_i ∈ [tau_min, tau_max]
 %   r1       – (n×1) mode 1’s resistance density at each θ_i
@@ -55,12 +55,10 @@ end
 gamma1 = gamma1 ./ sum( gamma1 .* dtheta );  % Σ[γ1_i·Δθ_i] = 1
 gamma2 = gamma2 ./ sum( gamma2 .* dtheta );  % Σ[γ2_i·Δθ_i] = 1
 
-% Resistance density per mode (Ω per unit θ):
-r1    = gamma1 * mode1;   % Σ[r1_i·Δθ_i] = mode1
-r2    = gamma2 * mode2;   % Σ[r2_i·Δθ_i] = mode2
-r_tot = r1 + r2;          % combined density, Σ[r_tot_i·Δθ_i] = mode1 + mode2
-
-%% 5) Lumped branch resistances R_i = r_tot_i · Δθ_i
-R     = r_tot .* dtheta;  % (n×1), Σ[R_i] = mode1 + mode2
+% Now multiply by mode1, mode2 to get R1(i), R2(i):
+r1    = gamma1 * mode1;  % Σ[R1_i·Δθ_i] = mode1 (Ω)
+r2    = gamma2 * mode2;  % Σ[R2_i·Δθ_i] = mode2 (Ω)
+r_tot = r1 + r2;         % Σ[R_tot_i·Δθ_i] = mode1 + mode2
+R = r_tot * dtheta;
 
 end
