@@ -2,10 +2,10 @@ clear; clc; close all;
 
 % Driving data 목록 정의
 driving_files = {
-    'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\udds_unit_time_scaled_current.xlsx',
-    'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\us06_unit_time_scaled_current.xlsx',
+    %'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\udds_unit_time_scaled_current.xlsx',
+    %'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\us06_unit_time_scaled_current.xlsx',
     'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_CITY1_time_scaled_current.xlsx',
-    'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_HW1_time_scaled_current.xlsx'
+    %'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_HW1_time_scaled_current.xlsx'
 };
 
 % para_hats 저장할 변수
@@ -24,7 +24,7 @@ for fileIdx = 1:length(driving_files)
     data = readtable(filename);
 
     t_vec = data.Var1; % [sec]
-    I_vec = data.Var2; % [Ah]
+    I_vec = data.Var2; % [A]
     X = [0.001 0.001 10]; % [R0[ohm], R1[ohm], tau1[sec]]
 
     %% 1RC 모델 전압 생성
@@ -66,7 +66,7 @@ for fileIdx = 1:length(driving_files)
     
     %% Markov Noise
     original = V_est;
-    epsilon_percent_span = 3; % ±[%]
+    epsilon_percent_span = 5; % ±[%]
     initial_state = 51;
     sigma = 0.005;
     numseeds = 10; % seed 개수
@@ -82,7 +82,7 @@ for fileIdx = 1:length(driving_files)
     save(noise_filename, '-struct', 'noisedata'); % V_SD1~10 저장
 
     %% Fitting
-    para0 = [0.0012 0.0008 8];
+    para0 = [0.0012 0.0008 12];
     lb = [0 0 0.001];
     ub = para0 * 10;
 

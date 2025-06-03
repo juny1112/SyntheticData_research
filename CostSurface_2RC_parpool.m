@@ -24,7 +24,7 @@ for fileIdx = 1:numel(driving_files)
     I_vec = data.Var2;      % [A]  
 
     % (기준 파라미터) 2-RC 전압
-    X0    = [0.001 0.0005 0.0005 6 60];
+    X0    = [0.001 0.0005 0.0005 5 20];
     V_est = RC_model_2(X0,t_vec,I_vec);
 
     % ── 2. Markov Noise (10 seeds) ───────────────────────────────────────
@@ -47,8 +47,8 @@ for fileIdx = 1:numel(driving_files)
     cost_cell = cell(numSeeds,1);               % Cost-surface 저장
 
     % 공통 그리드
-    tau1_vec = 10.^(linspace(-1, 1.1, 101));     % 0.1 ~ ≈12.6 s (31 개)
-    tau2_vec = 10.^(linspace( 1, 2.1, 81));     % 10  ~ ≈126  s (81 개)
+    tau1_vec = 10.^(linspace(-1, 1.1, 101));     % 0.1 ~ ≈12.6 s (101 개)
+    tau2_vec = 10.^(linspace( -1, 1.7, 81));     % 10  ~ ≈50  s (81 개)
 
     opts = optimset('Display','off','MaxIter',1e3,...
                     'MaxFunEvals',1e4,'TolFun',1e-14,'TolX',1e-15);

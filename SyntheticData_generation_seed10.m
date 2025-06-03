@@ -24,24 +24,24 @@ for seed = 1:numseeds
     fieldname = sprintf('V_SD%d',seed);
     noisedata.(fieldname) = noisy;
     
-    % figure;
-    % subplot(2,1,1);
-    % plot(t_vec, original,'LineWidth',1.5); hold on;
-    % plot(t_vec,noisy,'--', 'LineWidth',1.5);
-    % xlabel('Time (sec)'); ylabel('Voltage [V]');
-    % legend('V_{est}','V_{SD}');
-    % title(sprintf('Markov Noise Voltage Data (Seed = %d)', seed));
-    % 
-    % subplot(2,1,2);
-    % plot(t_vec, eps_values , 'LineWidth',1.5);
-    % xlabel('Time (sec)'); ylabel('Noise');
-    % title('Markov Noise');
-    % 
-    % difference = noisy - original;% = original X eps_k
-    % figure;
-    % plot(t_vec, difference,'LineWidth',1.5)
-    % xlabel('Time (sec)'); ylabel('Noise');
-    % title(sprintf('Noise (SD - original) (Seed = %d)', seed));
+    figure;
+    subplot(2,1,1);
+    plot(t_vec, original,'LineWidth',1.5); hold on;
+    plot(t_vec,noisy,'--', 'LineWidth',1.5);
+    xlabel('Time (sec)'); ylabel('Voltage [V]');
+    legend('V_{est}','V_{SD}');
+    title(sprintf('Markov Noise Voltage Data (Seed = %d)', seed));
+
+    subplot(2,1,2);
+    plot(t_vec, eps_values , 'LineWidth',1.5);
+    xlabel('Time (sec)'); ylabel('Noise');
+    title('Markov Noise');
+
+    difference = noisy - original;% = original X eps_k
+    figure;
+    plot(t_vec, difference,'LineWidth',1.5)
+    xlabel('Time (sec)'); ylabel('Noise');
+    title(sprintf('Noise (SD - original) (Seed = %d)', seed));
 
 end
 

@@ -1,16 +1,27 @@
+% Sin wave 합성한 버전
 clear; clc; close all;
 
 % Driving data 목록 정의
 driving_files = {
-    %'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\udds_unit_time_scaled_current.xlsx',
-    %'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\us06_unit_time_scaled_current.xlsx',
-    'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_CITY1_time_scaled_current.xlsx',
-    %'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_HW1_time_scaled_current.xlsx'
+    'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\udds_unit_time_scaled_current.xlsx',
+    'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\us06_unit_time_scaled_current.xlsx',
+    %'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_CITY1_time_scaled_current.xlsx',
+    'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_HW1_time_scaled_current.xlsx'
 };
+
+% 사인파 설정
+tau_add = 377;           % [s]  추가 τ
+f_add   = 1/tau_add;     % [Hz]
+A_add   = 10;             % [A]  원하는 진폭
 
 % para_hats 저장할 변수
 all_para_hats = struct;
 all_rmse = struct;
+
+% Multi-start
+ms = MultiStart( ...
+    "UseParallel" , true , ...  
+    "Display"     , "off" );
 
 % loop (input: driving data(t, I) (+ ECM parameters(R, tau)) / output: V_est, V_SD, ECM parameters hat(R, tau), RMSE)
 for fileIdx = 1:length(driving_files)
@@ -18,7 +29,9 @@ for fileIdx = 1:length(driving_files)
     data = readtable(filename);
 
     t_vec = data.Var1; % [sec]
-    I_vec = data.Var2; % [Ah]
+    I_vec = data.Var2; % [A]
+    I_vec = I_vec + A_add * sin(2*pi*f_add * t_vec); % 주기=tau_add 사인파 합성
+
     X = [0.001 0.0005 0.0005 6 60]; % [R0[ohm], R1[ohm], R2[ohm], tau1[sec], tau2[sec]]
 
     % 2RC 모델 전압 생성
@@ -33,7 +46,7 @@ for fileIdx = 1:length(driving_files)
     subplot(3,1,1);
     plot(t_vec, I_vec, 'r-', 'LineWidth', 1.2);
     xlabel('Time (sec)');
-    ylabel('Current (C)');
+    ylabel('Current (A)');
     title(sprintf('%s - Current Profile', base_name));
     grid on;
 
@@ -49,7 +62,7 @@ for fileIdx = 1:length(driving_files)
     subplot(3,1,3);
     yyaxis left;
     plot(t_vec, I_vec, 'r-', 'LineWidth', 1.2);
-    ylabel('Current (C)');
+    ylabel('Current (A)');
     ax = gca;
     ax.YColor = 'r';
 
@@ -85,30 +98,40 @@ for fileIdx = 1:length(driving_files)
     lb = [0 0 0 0.001 0.001];
     ub = para0 * 10;
 
-    options = optimset('display','iter', ...
-        'MaxIter',1e4, ...
-        'MaxFunEvals',1e6, ...
+    options = optimset('display','off', ...
+        'MaxIter',1e3, ...
+        'MaxFunEvals',1e4, ...
         'TolFun',1e-14, ...
         'TolX',1e-15 ...
         );
 
-    para_hats = zeros(numseeds, length(para0)+3);
-    RMSE_list = zeros(10, 1);
+    nvars      = numel(para0);
+    nStartPts  = 20;                     % 시작점 개수
+    startPts   = RandomStartPointSet('NumStartPoints', nStartPts);
+
+    para_hats  = zeros(numseeds, nvars+2);  % + exitflag, iter
+    RMSE_list  = zeros(numseeds,1);
     
     
     figure('Name', sprintf('%s - All Seed Fitting Results', base_name), 'NumberTitle', 'off');
 
     for i = 1:numseeds
         V_SD = noisedata.(sprintf('V_SD%d', i));
-        [para_hat, fval, exitflag, output] = fmincon(@(para)RMSE_2RC(V_SD,para,t_vec,I_vec),para0,[],[],[],[],lb,ub,[],options);    
-        para_hats(i, :) = [para_hat, exitflag, output.iterations, fval];
+
+        % MultiStart fitting
+        problem = createOptimProblem('fmincon', ...
+            'objective', @(p)RMSE_2RC(V_SD,p,t_vec,I_vec), ...
+            'x0', para0, 'lb', lb, 'ub', ub, 'options', options);
+
+        [bestP,bestFval,eflg,~,sltns] = run(ms, problem, startPts);
+
+        % 결과 저장
+        idx = find([sltns.Fval] == bestFval, 1);
+        para_hats(i,:) = [bestP eflg sltns(idx).Output.iterations];
+        RMSE_list(i)   = bestFval;
 
         V_0 = RC_model_2(para0, t_vec, I_vec);
-        V_hat = RC_model_2(para_hat, t_vec, I_vec);
-
-        RMSE_value = sqrt(mean((V_SD - V_hat).^2));
-        RMSE_list(i) = RMSE_value; 
-        
+        V_hat = RC_model_2(bestP, t_vec, I_vec);
 
         % Plot V fitting
         subplot(2,5,i); % 2행 5열 subplot
@@ -136,24 +159,26 @@ for fileIdx = 1:length(driving_files)
     % Summary statistics of parameters
     sgtitle(sprintf('%s - 2RC Fitting for All Seeds', base_name));  % 전체 제목
 
-    mean_para = mean(para_hats, 1);
-    min_para  = min(para_hats, [], 1);
-    max_para  = max(para_hats, [], 1);
-    var_para  = var(para_hats, 0, 1);  % 0은 "표본 분산" 의미
+    mean_para = mean(para_hats, 1);  min_para  = min(para_hats, [], 1);
+    max_para  = max(para_hats, [], 1); var_para  = var(para_hats, 0, 1);  % 0은 "표본 분산" 의미
+    
+    mean_RMSE = mean(RMSE_list, 1); min_RMSE  = min(RMSE_list, [], 1);
+    max_RMSE  = max(RMSE_list, [], 1);  var_RMSE  = var(RMSE_list, 0, 1);
 
     fprintf('>> [%s] 파라미터 요약 통계 :\n', base_name);
-    fprintf('   [Mean]     R0 = %.8f, R1 = %.8f, R2 = %.8f, tau1 = %.8f, tau2 = %.8f\n', mean_para(1), mean_para(2), mean_para(3), mean_para(4), mean_para(5));
-    fprintf('   [Min]      R0 = %.8f, R1 = %.8f, R2 = %.8f, tau1 = %.8f, tau2 = %.8f\n', min_para(1),  min_para(2),  min_para(3), min_para(4), min_para(5));
-    fprintf('   [Max]      R0 = %.8f, R1 = %.8f, R2 = %.8f, tau1 = %.8f, tau2 = %.8f\n', max_para(1),  max_para(2),  max_para(3), max_para(4), max_para(5));
-    fprintf('   [Variance] R0 = %.8f, R1 = %.8f, R2 = %.8f, tau1 = %.8f, tau2 = %.8f\n\n', var_para(1), var_para(2), var_para(3), var_para(4), var_para(5));
+    fprintf('   [Mean]     R0 = %.8f, R1 = %.8f, R2 = %.8f, tau1 = %.8f, tau2 = %.8f, RMSE = %.8f\n', mean_para(1), mean_para(2), mean_para(3), mean_para(4), mean_para(5), mean_RMSE);
+    fprintf('   [Min]      R0 = %.8f, R1 = %.8f, R2 = %.8f, tau1 = %.8f, tau2 = %.8f, RMSE = %.8f\n', min_para(1),  min_para(2),  min_para(3), min_para(4), min_para(5), min_RMSE);
+    fprintf('   [Max]      R0 = %.8f, R1 = %.8f, R2 = %.8f, tau1 = %.8f, tau2 = %.8f, RMSE = %.8f\n', max_para(1),  max_para(2),  max_para(3), max_para(4), max_para(5), max_RMSE);
+    fprintf('   [Variance] R0 = %.8f, R1 = %.8f, R2 = %.8f, tau1 = %.8f, tau2 = %.8f, RMSE = %.8f\n\n', var_para(1), var_para(2), var_para(3), var_para(4), var_para(5), var_RMSE);
 
     all_para_hats.(base_name) = para_hats;
     all_rmse.(base_name) = RMSE_list;
     
+
 end
 
 
-%% Cost function (weight 무시)
+% Cost function (weight 무시)
 function cost = RMSE_2RC(data,para,t,I)
     model = RC_model_2(para, t, I);
     cost = sqrt(mean((data - model).^2));

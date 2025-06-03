@@ -1,6 +1,5 @@
-% ------------------------------------------------------------------------
-%  1RC 모델 파라미터 식별 + MultiStart 최적화
-% -------------------------------------------------------------------------
+
+% TroubleShooting_MS최적화_1RC
 
 clear; clc; close all;
 
@@ -23,7 +22,7 @@ for fileIdx = 1:length(driving_files)
     I_vec = data.Var2;    % [A]
 
     % 초기 모델 전압 생성 및 저장
-    X0    = [0.001, 0.001, 10];   % [R0, R1, τ1]
+    X0    = [0.001, 0.001, 60];   % [R0, R1, τ1]
     V_est = RC_model_1(X0, t_vec, I_vec);
     save(sprintf('load%d_data.mat', fileIdx), 't_vec', 'I_vec', 'V_est');
 
@@ -42,14 +41,14 @@ for fileIdx = 1:length(driving_files)
 
     % fmincon 옵션 설정
     R0 = 0.001;
-    p0 = [0.0008, 8];
+    p0 = [0.0008, 50];
     lb = [0, 0.1];
-    ub = [0.003, 50];
+    ub = [0.003, 140];
     opts = optimoptions('fmincon', 'Display', 'iter', 'MaxIterations', 1e3, ...
          'MaxFunctionEvaluations', 1e4, 'TolFun', 1e-14, 'TolX', 1e-15, ...
          'OutputFcn', @plotIter);
 
-    results = zeros(numSeeds, 4);  % [R1, τ1, exitflag, iterations]
+    results = zeros(numSeeds, numel(p0)+2);  % [R1, τ1, exitflag, iterations]
     startPts = RandomStartPointSet('NumStartPoints', 20);
 
     % Seed별 최적화
@@ -58,7 +57,7 @@ for fileIdx = 1:length(driving_files)
 
         % 1) Cost-surface 계산
         R1_vec   = linspace(lb(1), ub(1), 50);
-        tau1_vec = linspace(lb(2), ub(2), 50);
+        tau1_vec = linspace(lb(2), ub(2), 100);
         cost_surf = zeros(numel(tau1_vec), numel(R1_vec));
         for ii = 1:numel(R1_vec)
             for jj = 1:numel(tau1_vec)

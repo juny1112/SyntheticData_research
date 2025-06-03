@@ -1,24 +1,22 @@
+% pulse + driving Loop for 1RC model
 clear; clc; close all;
 
-% % Driving data 목록 정의
+% % Driving data
 % driving_files = {
-%     %'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\udds_unit_time_scaled_current.xlsx',
-%     %'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\us06_unit_time_scaled_current.xlsx',
-%     'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_CITY1_time_scaled_current.xlsx',
-%     %'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_HW1_time_scaled_current.xlsx'
-% };
+%      'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\udds_unit_time_scaled_current.xlsx',
+%      'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\us06_unit_time_scaled_current.xlsx',
+%      'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_CITY1_time_scaled_current.xlsx',
+%      'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_HW1_time_scaled_current.xlsx'
+%  };
 
-% or pulse data
-t_end = 50;    % [sec]
+% Pulse data
+t_end = 180;    % [sec]
 dt    = 0.1;   % [sec]
 t_p0  = 10;    % 펄스 시작 [sec]
 t_p1  = 20;    % 펄스 종료 [sec]
-
 pulse.t = 0:dt:t_end;                % 시간 벡터
 pulse.I = zeros(size(pulse.t));      % 전류 벡터
 pulse.I(pulse.t>=t_p0 & pulse.t<=t_p1) = 1;  % 10~20초 1C 펄스
-
-% driving_files 셀에는 이제 struct 하나만 담습니다
 driving_files = { pulse };
 
 % para_hats 저장할 변수
@@ -31,7 +29,6 @@ ms = MultiStart( ...
     "Display"     , "off" );
 
 %loop (input: driving data(t, I) (+ ECM parameters(R, tau)) / output: V_est, V_SD, ECM parameters hat(R, tau), RMSE)
-
 for fileIdx = 1:length(driving_files)
     item = driving_files{fileIdx};
     if isstruct(item)
@@ -42,11 +39,13 @@ for fileIdx = 1:length(driving_files)
         t_vec = data.Var1;
         I_vec = data.Var2;
     end
-    X = [1 1 1]; % [R0[ohm], R1[ohm], tau1[sec]]
-
-    %% 1RC 모델 전압 생성
     t_vec = t_vec(:);
     I_vec = I_vec(:);
+    % 1RC parameter set [R0[ohm], R1[ohm], tau1[sec]]
+    X = [0.001 0.001 60]; 
+
+    %% 1RC 모델 전압 생성
+
     V_est = RC_model_1(X, t_vec, I_vec);
     base_name = sprintf('load%d', fileIdx);
     save([base_name '_data.mat'], 't_vec', 'I_vec', 'V_est');
@@ -101,7 +100,7 @@ for fileIdx = 1:length(driving_files)
     save(noise_filename, '-struct', 'noisedata'); % V_SD1~10 저장
 
     %% Fitting
-    para0 = [1.1 0.8 1.2];
+    para0 = [0.0012 0.0008 12];
     lb = [0 0 0.001];
     ub = para0 * 10;
 
@@ -140,13 +139,14 @@ for fileIdx = 1:length(driving_files)
 
         % Plot V fitting
         subplot(2,5,i); % 2행 5열 subplot
-        plot(t_vec,V_SD, '-k', LineWidth=2); hold on
+        plot(t_vec,V_SD, '-k', LineWidth=1.5); hold on
         plot(t_vec,V_est,'-g', LineWidth=1.5);
-        plot(t_vec,V_hat,'--r', LineWidth=1.5);
-        %plot(t_vec,V_0,'--b', LineWidth=1.5);
+        plot(t_vec,V_hat,'-r', LineWidth=1.5);
+        plot(t_vec,V_0,'--b', LineWidth=1.5);
+
         xlabel('Time (sec)');
         ylabel('Voltage (V)');
-        legend({'Synthetic','Original','Fitted'}, 'Location','northeast');
+        legend({'Synthetic','Original','Fitted', 'Initial'}, 'Location','northeast');
 
         title(sprintf('Seed %d', i));
 
@@ -154,20 +154,20 @@ for fileIdx = 1:length(driving_files)
 
     end
     
-    %% Summary statistics of parameters
     sgtitle(sprintf('%s - 1RC Fitting for All Seeds', base_name));  % 전체 제목
 
+    %% Summary statistics of parameters
     mean_para = mean(para_hats, 1);  min_para  = min(para_hats, [], 1);
-    max_para  = max(para_hats, [], 1); var_para  = var(para_hats, 0, 1);  % 0은 "표본 분산" 의미
+    max_para  = max(para_hats, [], 1); std_para  = std(para_hats, 0, 1);  % 0: 표본 표준편차 구함
     
     mean_RMSE = mean(RMSE_list, 1); min_RMSE  = min(RMSE_list, [], 1);
-    max_RMSE  = max(RMSE_list, [], 1);  var_RMSE  = var(RMSE_list, 0, 1);
+    max_RMSE  = max(RMSE_list, [], 1);  std_RMSE  = std(RMSE_list, 0, 1);
 
     fprintf('>> [%s] 파라미터 요약 통계 :\n', base_name);
     fprintf('   [Mean]     R0 = %.8f, R1 = %.8f, tau = %.6f, RMSE = %.8f\n', mean_para(1), mean_para(2), mean_para(3), mean_RMSE); 
     fprintf('   [Min]      R0 = %.8f, R1 = %.8f, tau = %.6f, RMSE = %.8f\n', min_para(1),  min_para(2),  min_para(3), min_RMSE);
     fprintf('   [Max]      R0 = %.8f, R1 = %.8f, tau = %.6f, RMSE = %.8f\n', max_para(1),  max_para(2),  max_para(3), max_RMSE);
-    fprintf('   [Variance] R0 = %.8f, R1 = %.8f, tau = %.6f, RMSE = %.8f\n\n', var_para(1), var_para(2), var_para(3), var_RMSE);
+    fprintf('   [Deviation]R0 = %.8f, R1 = %.8f, tau = %.6f, RMSE = %.8f\n\n', std_para(1), std_para(2), std_para(3), std_RMSE);
 
     all_para_hats.(base_name) = para_hats;
     all_rmse.(base_name) = RMSE_list;
