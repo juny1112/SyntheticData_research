@@ -46,7 +46,7 @@ R_tot  = R1 + R2;         % (n×1), Σ[R_tot·Δlnτ] = 0.002 Ω
 % fprintf('Mode1 합 = %.4g Ω, Mode2 합 = %.4g Ω, Total 합 = %.4g Ω\n', S1, S2, St);
 
 %% 5) 그래프 그리기
-figure('Name','Bimodal R(\tau) Distribution','Color','w');
+figure('Name','Bimodal');
 plot(theta, R1, 'r-o', 'LineWidth',1.5, 'MarkerSize',5, 'DisplayName','Mode 1 (1 mΩ)'); hold on;
 plot(theta, R2, 'g-s', 'LineWidth',1.5, 'MarkerSize',5, 'DisplayName','Mode 2 (1 mΩ)');
 plot(theta, R_tot, 'k-^','LineWidth',2, 'MarkerSize',6, 'DisplayName','Total (2 mΩ)');
@@ -55,3 +55,13 @@ ylabel('\gamma', 'FontSize',12);
 title('Bimodal Resistance Distribution', 'FontSize',14);
 grid on; legend('Location','northwest','FontSize',11);
 xlim([log(tau_min) log(tau_max)]);
+
+figure('Name','\tau vs R','Color','w');
+stem(tau, R, 'filled','MarkerSize',4);
+xlabel('\tau\;[s]', 'FontSize',12);
+ylabel('R_i[Ω]',  'FontSize',12);
+title('Lumped Branch Resistances vs \tau', 'FontSize',14);
+grid on;
+set(gca, 'XScale', 'log');   % log-scale x-axis to reflect τ spacing
+xlim([tau_min, tau_max]);
+

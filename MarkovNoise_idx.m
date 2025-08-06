@@ -1,6 +1,6 @@
 %% Markov noise function
 
-function [noisy, states, final_state, P, epsilon_vector, eps_values] = MarkovNoise(original, epsilon_percent_span, initial_state, sigma)
+function [noisy, states, final_state, P, epsilon_vector, eps_values] = MarkovNoise_idx(original, epsilon_percent_span, initial_state, sigma)
 %--------------------------------------------------------------------------
 % MarkovNoise
 %   노이즈 넣을 값 original(전류, 전압 등)에 대해 마르코프 체인을 이용해 상대적 퍼센트 잡음을 추가한 
@@ -57,8 +57,9 @@ function [noisy, states, final_state, P, epsilon_vector, eps_values] = MarkovNoi
     %   - epsilon_vector(i): 현재상태. 이걸 정규분포에서 평균이라고 잡음
     %----------------------------------------------------------------------
     P = zeros(N);
+    idx = 1:N;
     for i = 1:N
-        probabilities = normpdf(epsilon_vector, epsilon_vector(i), sigma);
+        probabilities = normpdf(idx, i, sigma);
         P(i, :) = probabilities / sum(probabilities);
     end
 

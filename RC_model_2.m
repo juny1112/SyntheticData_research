@@ -1,6 +1,6 @@
 % 2RC model function
 
-function V_est = RC_model_2(X, t_vec, I_vec)
+function V_est = RC_model_2(X, t_vec, I_vec, OCV)
     
     % X: [R0, R1, R2, tau1, tau2]
     R0   = X(1);
@@ -16,13 +16,10 @@ function V_est = RC_model_2(X, t_vec, I_vec)
     V_est = zeros(N, 1);
 
     for k = 1:N
-        % (1) OCV = 0 가정
-        OCV = 0;
-
-        % (2) R0 전압강하
+        % R0 전압강하
         IR0 = R0 * I_vec(k);
 
-        % (3) RC1, RC2 업데이트
+        % RC1, RC2 업데이트
         alpha1 = exp(-dt(k)/tau1);
         alpha2 = exp(-dt(k)/tau2);
 
@@ -37,6 +34,6 @@ function V_est = RC_model_2(X, t_vec, I_vec)
         end
 
         % (4) 최종 전압
-        V_est(k) = OCV + IR0 + Vrc1 + Vrc2;
+        V_est(k) = OCV(k) + IR0 + Vrc1 + Vrc2;
     end
 end

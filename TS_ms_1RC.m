@@ -1,5 +1,5 @@
 
-% TroubleShooting_MS최적화_1RC
+% TroubleShooting_MS최적화_1RC + iteration step
 
 clear; clc; close all;
 
