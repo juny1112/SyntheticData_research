@@ -20,6 +20,7 @@ R0       = 1e-3;                 % R0
 % ─ 확인용 플롯 ──────────────────────────────────────
 figure;
 semilogx(tau_i, R_i*1e3, 'o-')
+plot(tau_i,R_i*1e3, 'o-')
 xlabel('\tau [s]'); ylabel('R_i [m\Omega]');
 title('n-RC Resistance Distribution (Trimodal, 50 % SOC)');
 grid on

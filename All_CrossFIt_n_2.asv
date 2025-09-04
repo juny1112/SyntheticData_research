@@ -28,33 +28,39 @@ clear; clc; close all;
 % (A-2) multimodal 로 n-RC 참 파라미터 만들기
 % ------------------------------------------------------------------
 
-% n        = 50;                  % 총 RC 쌍
-% n_mode12 = [15 15];              % mode 할당 n 개수
-% tau_pk   = [0.4 3 88];           % τ 중심 [s]
-% sigma = [0.07 0.18 0.2];         % 표준편차
-% areaRel  = [1e-3 5e-2 1];      % 면적 비
-% R_total  = 0.002;                % 총 저항
-% R_mode_sum   = R_total * areaRel / sum(areaRel);  % 각 mode 별 저항 [Ω]
-% tau_rng  = [0.1 400];           % 배치 범위
-% R0       = 1e-3;                 % R0
-% 
-% [X,R_i,tau_i] = multimodal_Rtau(n, n_mode12, ...
-%                               tau_pk, sigma, R_mode_sum, ...
-%                               tau_rng, R0);
-% X_true = X;  
+n        = 50;                  % 총 RC 쌍
+n_mode12 = [15 15];              % mode 할당 n 개수
+tau_pk   = [0.4 3 88];           % τ 중심 [s]
+sigma = [0.07 0.18 0.2];         % 표준편차
+areaRel  = [1e-3 5e-2 1];      % 면적 비
+R_total  = 0.002;                % 총 저항
+R_mode_sum   = R_total * areaRel / sum(areaRel);  % 각 mode 별 저항 [Ω]
+tau_rng  = [0.1 400];           % 배치 범위
+R0       = 1e-3;                 % R0
+
+[X,R_i,tau_i] = multimodal_Rtau(n, n_mode12, ...
+                              tau_pk, sigma, R_mode_sum, ...
+                              tau_rng, R0);
+X_true = X;  
 
 %% ------------------------------------------------------------------
-% (A-3) DRT 로 n-RC 참 파라미터 만들기
+% (A-2) multimodal 로 n-RC 참 파라미터 만들기
 % ------------------------------------------------------------------
 
 n       = 50;
 tau_min = 0.1;         % s
 tau_max = 400;          % s
+
 tau_mode = [0.4; 3; 88];        % s
 sigma10  = [0.230; 0.200; 0.190];  % decades
 
-[mu10, tau_mean, tau_std, tau_median, mu_n, sigma_n, all_modes_table] = ...
+[mu10, tau_mean, tau_std, tau_median, mu_n, sigma_n] = ...
     DRT_mu_sigma(tau_mode, sigma10);
+
+mu_sigma_T = table(tau_mode, sigma10, mu10, tau_median, tau_mean, tau_std, ...
+          mu_n, sigma_n, ...
+          'VariableNames', ...
+          {'tau_mode','sigma10','mu10','tau_median','tau_mean','tau_std','mu_n','sigma_n'});
 
 A_tot = 2.0e-3;         % 총 저항 [Ω]
 w     = [1e-3 5e-2 1];% 모드 면적 비 (합이 1 아니어도 OK)
@@ -63,8 +69,6 @@ w     = [1e-3 5e-2 1];% 모드 면적 비 (합이 1 아니어도 OK)
 [theta, r_mode, r_theta, dth, R, tau, g_tau, A_modes, w_used] = ...
     DRT_Rtau(n, tau_min, tau_max, mu10, sigma10, A_tot, w);
 
-R0     = 1e-3;                 % 원하는 직류옴 저항(없으면 0)
-X_true = [R0; R(:); tau(:)];   % 열벡터로
 
 %% ------------------------------------------------------------------
 % (B) 전류 프로파일 목록 (struct 또는 .xlsx 혼용 가능)
@@ -142,12 +146,12 @@ for fileIdx = 1:length(driving_files)
     subplot(3,1,1);
     plot(t_vec,I_vec,'r-','LineWidth',1.2);
     xlabel('Time (sec)'); ylabel('Current (A)');
-    title(sprintf('%s - Current Profile', base_name), 'Interpreter','none'); grid on;
+    title(sprintf('%s - Current Profile',base_name)); grid on;
 
     subplot(3,1,2);
     plot(t_vec,V_est,'b-','LineWidth',1.2);
     xlabel('Time (sec)'); ylabel('Voltage (V)');
-    title(sprintf('%s - RC Model Voltage', base_name), 'Interpreter','none'); grid on;
+    title(sprintf('%s - RC Model Voltage',base_name)); grid on;
 
     subplot(3,1,3);
     yyaxis left;  plot(t_vec,I_vec,'r-','LineWidth',1.2);
@@ -155,7 +159,7 @@ for fileIdx = 1:length(driving_files)
     yyaxis right; plot(t_vec,V_est,'b-','LineWidth',1.2);
     ylabel('Voltage (V)'); ax.YColor='b';
     xlabel('Time (sec)');
-    title(sprintf('%s - Current & Voltage', base_name), 'Interpreter','none');
+    title(sprintf('%s - Current & Voltage',base_name));
     legend('Current (I)','Voltage (V)'); grid on;
 
     %% 4) Markov 0~10 세트 생성
@@ -223,7 +227,7 @@ for fileIdx = 1:length(driving_files)
         title(displaynames{s}); grid on;
         %xlim([200 400]);
     end
-    sgtitle(sprintf('%s - 2RC Fitting for All Seeds', base_name), 'Interpreter','none');
+    sgtitle(sprintf('%s - 2RC Fitting for All Seeds', base_name));
 
     %% 6) 통계 출력 (원본 형식 유지)
     idxSeed = 2:size(para_hats,1);     % ← seed1~10 행만 선택
