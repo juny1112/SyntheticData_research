@@ -42,7 +42,7 @@ ub    = [0.05 0.03 300];
 % ── 누적 컨테이너 ────────────────────────────────────────────────────
 all_para_hats = struct;   % 각 파일: [nSeg × 6] = [R0 R1 tau1 | RMSE exitflag iter]
 all_rmse      = struct;   % 각 파일: [nSeg × 1] RMSE
-all_summary   = struct;   % 각 파일: 12×3 요약 테이블 (90/70/50/30 × Mean/Min/Max)
+all_summary   = struct;   % 각 파일: 12×4 요약 테이블 (90/70/50/30 × Mean/Min/Max, cols=R0 R1 tau1 RMSE)
 
 % 대표 SOC(정리/플롯 기준)
 soc_targets  = [90 70 50 30];
@@ -179,11 +179,11 @@ for f = 1:numel(sim_files)
     % close(fig);
     
 
-    % 4) SOC(90/70/50/30)별 요약 테이블(12×5) 구성
+    % 4) SOC(90/70/50/30)별 요약 테이블(12×4) 구성
     T = table( ...
-       nan(12,1), nan(12,1), nan(12,1), ...
-       'VariableNames', {'R0','R1','tau1'}, ...
-       'RowNames',     rowNames );
+        nan(12,1), nan(12,1), nan(12,1), nan(12,1), ...
+        'VariableNames', {'R0','R1','tau1','RMSE'}, ...
+        'RowNames',     rowNames );
 
     P_all = para_hats(:,1:3);
 
@@ -198,10 +198,13 @@ for f = 1:numel(sim_files)
     for g = 1:4
         idx = groups{g};
         if any(idx)
-            block = P_all(idx,:);
-            T{r  ,:} = mean(block,1,'omitnan');  % Mean
-            T{r+1,:} = min (block,[],1);         % Min
-            T{r+2,:} = max (block,[],1);         % Max
+            blockP = P_all(idx,:);            % [*, 3] = R0 R1 tau1
+            blockE = RMSE_list(idx);          % [*, 1] = RMSE
+            block4 = [blockP, blockE];        % [*, 4] = R0 R1 tau1 RMSE
+
+            T{r  ,:} = mean(block4,1,'omitnan');  % Mean
+            T{r+1,:} = min (block4,[],1);         % Min
+            T{r+2,:} = max (block4,[],1);         % Max
         end
         r = r + 3;
     end
@@ -212,7 +215,7 @@ for f = 1:numel(sim_files)
     all_summary.(base_field)   = T;
 
     % 로그
-    fprintf('[done] %s → fitted %d segs, summary(12×3) 저장  |  counts: 90=%d,70=%d,50=%d,30=%d\n', ...
+    fprintf('[done] %s → fitted %d segs, summary(12×4) 저장  |  counts: 90=%d,70=%d,50=%d,30=%d\n', ...
         base_raw, nSeg, nnz(m90), nnz(m70), nnz(m50), nnz(m30));
     
 end

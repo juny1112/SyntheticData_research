@@ -10,8 +10,8 @@ X_true = [0.001 0.0005 0.0005 6 60];
 % ------------------------------------------------------------------
 
 % Pulse
-dt = 1; t_start = 0;  t_end = 180;
-pulse_start = 0; pulse_end = 180;
+dt = 0.1; t_start = 0;  t_end = 10;
+pulse_start = 0; pulse_end = 10;
 
 pulse.t = (t_start:dt:t_end)';       
 pulse.I = zeros(size(pulse.t));
@@ -37,7 +37,7 @@ driving_files = {pulse};
 %% ------------------------------------------------------------------
 % (C) 마르코프 노이즈 설정
 % ------------------------------------------------------------------
-epsilon_percent_span = 5;   % ±5%
+epsilon_percent_span = 1;   % ±5%
 initial_state        = 51;
 sigma                = 5;
 nSeeds               = 10;  % seed1 … seed10  (+ Non_noise)

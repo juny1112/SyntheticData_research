@@ -49,21 +49,29 @@ clear; clc; close all;
 
 n       = 50;
 tau_min = 0.1;         % s
-tau_max = 400;          % s
-tau_mode = [0.4; 3; 88];        % s
-sigma10  = [0.230; 0.200; 0.190];  % decades
+tau_max = 400;         % s
+A_tot = 2.0e-3;        % 총 저항 [Ω]
+R0     = 1e-3;         % Ω
 
+% trimodal
+% tau_mode = [0.4; 3; 88];        % s
+% sigma10  = [0.210; 0.200; 0.190];  % decades
+% w     = [1e-3 5e-2 1];  % 모드 면적 비 (저항 비)
+% % w     = [1e-4 2.5e-3 1]; % 참고문헌 면적 비
+
+% bimodal
+tau_mode = [3; 88];        % s
+sigma10  = [0.200; 0.190]; % decades
+w        = [5e-2 1];       % 모드 면적 비 (저항 비)
+
+% true 값 비교용
 [mu10, tau_mean, tau_std, tau_median, mu_n, sigma_n, all_modes_table] = ...
     DRT_mu_sigma(tau_mode, sigma10);
 
-A_tot = 2.0e-3;         % 총 저항 [Ω]
-w     = [1e-3 5e-2 1];% 모드 면적 비 (합이 1 아니어도 OK)
-
-% ---------- 함수 호출 ----------
+% 저항 분포 생성
 [theta, r_mode, r_theta, dth, R, tau, g_tau, A_modes, w_used] = ...
     DRT_Rtau(n, tau_min, tau_max, mu10, sigma10, A_tot, w);
 
-R0     = 1e-3;                 % 원하는 직류옴 저항(없으면 0)
 X_true = [R0; R(:); tau(:)];   % 열벡터로
 
 %% ------------------------------------------------------------------
@@ -86,18 +94,18 @@ driving_paths = {
  };
 
 % Pulse 켜기
-% driving_files = {pulse};
+%driving_files = {pulse};
 % 
 % % Driving 켜기
-% driving_files = driving_paths;
+driving_files = driving_paths;
 % 
 % 둘 다 켜기
-driving_files = [{pulse}; driving_paths];
+% driving_files = [{pulse}; driving_paths];
 
 %% ------------------------------------------------------------------
 % (C) 마르코프 노이즈 설정
 % ------------------------------------------------------------------
-epsilon_percent_span = 1;     % ±5 %
+epsilon_percent_span = 2;     % ±5 %
 initial_state = 51;
 sigma = 5;
 nSeeds = 10;                  % seed 1~10  (+ seed 0 = 원본)
@@ -221,7 +229,7 @@ for fileIdx = 1:length(driving_files)
         legend({'Synthetic','True','Fitted','Initial'}, 'Location','northeast');
         xlabel('Time (sec)'); ylabel('Voltage (V)');
         title(displaynames{s}); grid on;
-        %xlim([200 400]);
+        xlim([200 400]);
     end
     sgtitle(sprintf('%s - 2RC Fitting for All Seeds', base_name), 'Interpreter','none');
 
@@ -263,6 +271,59 @@ for fileIdx = 1:length(driving_files)
     all_para_hats.(base_name) = para_hats;
     all_rmse.(base_name)      = RMSE_list;
     all_summary.(base_name)   = T;
+
+    %% 8) g(τ) 마킹(τ_mode/τ_mean/τ_median/mean τ1/τ2)
+    % 평균 τ1, τ2 (seed1~10 기준) — 이미 위에서 계산한 mean_para 사용
+    mean_tau1 = mean_para(4);
+    mean_tau2 = mean_para(5);
+
+    % ---------- g(τ) vs τ (마킹 포함) ----------
+    fig_gtau = figure('Name', sprintf('%s - g(tau) plot', base_name), ...
+        'NumberTitle','off', 'Color','w');
+    semilogx(tau, g_tau, 'LineWidth', 1.8); grid on; hold on
+    xlabel('$\tau\ (\mathrm{s})$','Interpreter','latex');
+    ylabel('$g(\tau)\;[\Omega/\mathrm{s}]$','Interpreter','latex');
+    title('$g(\tau)\ \mathrm{vs}\ \tau$','Interpreter','latex');
+
+    c_mode   = [0.10 0.10 0.10];  ls_mode   = '-';    % tau_mode
+    c_mean   = [0.10 0.60 0.10];  ls_mean   = '--';   % tau_mean
+    c_median = [0.10 0.30 0.90];  ls_median = '-.';   % tau_median
+    c_fit1   = [0.85 0.25 0.15];  ls_fit1   = ':';    % mean tau1
+    c_fit2   = [0.60 0.00 0.60];  ls_fit2   = ':';    % mean tau2
+
+    if exist('tau_min','var') && exist('tau_max','var')
+        xlim([tau_min, tau_max]);
+    end
+
+    % 첫 개만 범례, 나머지는 HandleVisibility='off'
+    if ~isempty(tau_mode)
+        xline(tau_mode(1), ls_mode, 'Color', c_mode, 'LineWidth', 1.5, ...
+            'DisplayName', '$\tau_{mode}$');
+        arrayfun(@(v) xline(v, ls_mode, 'Color', c_mode, 'LineWidth', 1.5, ...
+            'HandleVisibility','off'), tau_mode(2:end));
+    end
+    if ~isempty(tau_mean)
+        xline(tau_mean(1), ls_mean, 'Color', c_mean, 'LineWidth', 1.5, ...
+            'DisplayName', '$\tau_{\mathrm{mean}}$');
+        arrayfun(@(v) xline(v, ls_mean, 'Color', c_mean, 'LineWidth', 1.5, ...
+            'HandleVisibility','off'), tau_mean(2:end));
+    end
+    if ~isempty(tau_median)
+        xline(tau_median(1), ls_median, 'Color', c_median, 'LineWidth', 1.5, ...
+            'DisplayName', '$\tau_{\mathrm{median}}$');
+        arrayfun(@(v) xline(v, ls_median, 'Color', c_median, 'LineWidth', 1.5, ...
+            'HandleVisibility','off'), tau_median(2:end));
+    end
+
+    xline(mean_tau1, ls_fit1, 'Color', c_fit1, 'LineWidth', 1.7, ...
+        'DisplayName', '$\overline{\tau}_1^{\,\mathrm{fit}}$');
+    xline(mean_tau2, ls_fit2, 'Color', c_fit2, 'LineWidth', 1.7, ...
+        'DisplayName', '$\overline{\tau}_2^{\,\mathrm{fit}}$');
+
+    % 범례(라텍스 강제)
+    leg = legend('show','Location','best');
+    set(leg,'Interpreter','latex');
+
 end
 
 %% ------------------------------------------------------------------

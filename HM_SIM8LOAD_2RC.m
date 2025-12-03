@@ -2,30 +2,31 @@
 %  (개정) 전체 SIM 기반 2-RC 피팅 + SOC(90·70·50·30) 전역 통계
 %  • 입력: *_SIM.mat (SIM_table 필요, 총 32 seg = 8×4 가정)
 %  • 그룹핑: 기본=앞에서부터 8개씩 [90,70,50,30], 보조=SOC_center 최근접
-%  • 출력: 파일별 요약(12×5: 각 SOC의 Mean/Min/Max), 비교 플롯
+%  • 출력: 
+%       - 파일별 요약 all_summary (12×6: 각 SOC의 Mean/Min/Max)
+%           * R0,R1,R2 : mΩ
+%           * tau1,tau2 : s
+%           * RMSE : V
+%       - ECM 평균 파라미터 테이블 Tbl_ECM_mean (R*는 mΩ)
+%       - SOC×(avg/min/max) vs 셀 이름 RMSE 테이블 Tbl_RMSE (mV)
+%       - (NEW) 선택 SOC에서 R0~τ2 avg/min/max를 셀별로 정리한 엑셀
 % ======================================================================
 clc; clear; close all;
 
 % ── 경로 & 파일 리스트 ───────────────────────────────────────────────
 % folder_SIM = 'G:\공유 드라이브\BSL_Data4\HNE_SOC_moving_cutoff_5_processed\SIM_parsed';
-folder_SIM = 'G:\공유 드라이브\BSL_Data4\HNE_SOC_moving_cutoff_5_processed\SIM_parsed\이름 정렬';
+% folder_SIM = 'G:\공유 드라이브\BSL_Data4\HNE_Integrated_6_processed\Test4(order3)\SIM_parsed';
+folder_SIM = 'G:\공유 드라이브\BSL_Data4\HNE_agedcell_8_processed\SIM_parsed\셀정렬';
+
 sim_files  = dir(fullfile(folder_SIM,"*_SIM.mat"));
 if isempty(sim_files)
     error("SIM 파일을 찾지 못했습니다: %s", folder_SIM);
 end
 
-% save_path = fullfile(folder_SIM,'2RC_fitting');
-% if ~exist(save_path,'dir'); mkdir(save_path); end
-
 % 저장 경로는 상위(SIM_parsed) 폴더로 고정
 save_root = fileparts(folder_SIM);          % -> ...\SIM_parsed
 save_path = fullfile(save_root,'2RC_fitting');
 if ~exist(save_path,'dir'); mkdir(save_path); end
-
-% ──사용자 입력: 색상 매핑용 '용량/ SOH' (셀 순서와 동일하게 입력) ────────
-% 예) QC/40 값이나 SOH(%) 벡터를 입력
-Cap_user  = [58.94, 47.97, 52.15, 51.50, 57.29, 53.39];   
-Cap_label = 'Capacity (QC/40, Ah)';   % 컬러바 라벨
 
 % ── fmincon + MultiStart 설정 ────────────────────────────────────────
 ms       = MultiStart("UseParallel",true,"Display","off");
@@ -36,14 +37,14 @@ opt      = optimset('display','off','MaxIter',1e3,'MaxFunEvals',1e4, ...
 % 2-RC 초기추정값 / 경계 / 선형제약 (τ1<τ2)
 para0 = [0.003 0.0005 0.0005 10 100]; 
 lb    = [0       0       0      0.01  0.01];
-% ub    = para0*10;
 ub    = [0.05 0.005 0.03 100 5000];
 A_lin = [0 0 0 1 -1];  b_lin = 0;
 
 % ── 누적 컨테이너 ────────────────────────────────────────────────────
-all_para_hats = struct;   % 각 파일: [nSeg × 8] = [R0 R1 R2 tau1 tau2 | RMSE exitflag iter]
-all_rmse      = struct;   % 각 파일: [nSeg × 1] RMSE
-all_summary   = struct;   % 각 파일: 12×5 요약 테이블 (90/70/50/30 × Mean/Min/Max)
+all_para_hats = struct;   % 각 파일: [nSeg × 8] = [R0 R1 R2 tau1 tau2 | RMSE exitflag iter] (R*는 Ω)
+all_rmse      = struct;   % 각 파일: [nSeg × 1] RMSE (V)
+all_summary   = struct;   % 각 파일: 12×6 요약 테이블 (R0 R1 R2 tau1 tau2 RMSE; 각 SOC의 Mean/Min/Max)
+                          %           R*는 mΩ, tau*는 s, RMSE는 V
 
 % 대표 SOC(정리/플롯 기준)
 soc_targets  = [90 70 50 30];
@@ -106,8 +107,8 @@ for f = 1:numel(sim_files)
     end
 
     % 3) 전 세그먼트 피팅
-    para_hats = nan(nSeg, 5+3);
-    RMSE_list = nan(nSeg, 1);
+    para_hats = nan(nSeg, 5+3);   % [R0 R1 R2 tau1 tau2 RMSE exitflag iter]
+    RMSE_list = nan(nSeg, 1);     % RMSE (V)
 
     % 서브플롯 레이아웃(최대 8열 고정, 행은 자동)
     cols = 8;
@@ -142,8 +143,8 @@ for f = 1:numel(sim_files)
                 it = sol(find([sol.Fval]==Fval,1)).Output.iterations;
             end
 
-            para_hats(s,:) = [Pbest, Fval, exitflg, it];
-            RMSE_list(s)   = Fval;
+            para_hats(s,:) = [Pbest, Fval, exitflg, it];  % R*는 Ω, tau*는 s
+            RMSE_list(s)   = Fval;                        % V
 
             % ---- SOC 라벨 생성 ----
             if grp_code(s) >= 1 && grp_code(s) <= numel(soc_targets)
@@ -179,13 +180,14 @@ for f = 1:numel(sim_files)
     % 필요하면 창 닫기:
     % close(fig);
 
-    % 4) SOC(90/70/50/30)별 요약 테이블(12×5) 구성
+    % 4) SOC(90/70/50/30)별 요약 테이블(12×6) 구성
+    %    * R0,R1,R2 : mΩ 로 변환
     T = table( ...
-       nan(12,1), nan(12,1), nan(12,1), nan(12,1), nan(12,1), ...
-       'VariableNames', {'R0','R1','R2','tau1','tau2'}, ...
-       'RowNames',     rowNames );
+        nan(12,1), nan(12,1), nan(12,1), nan(12,1), nan(12,1), nan(12,1), ...
+        'VariableNames', {'R0','R1','R2','tau1','tau2','RMSE'}, ...
+        'RowNames',     rowNames );
 
-    P_all = para_hats(:,1:5);
+    P_all = para_hats(:,1:5);   % Ω, s
 
     % 그룹 마스크
     m90 = (grp_code==1);
@@ -198,273 +200,234 @@ for f = 1:numel(sim_files)
     for g = 1:4
         idx = groups{g};
         if any(idx)
-            block = P_all(idx,:);
-            T{r  ,:} = mean(block,1,'omitnan');  % Mean
-            T{r+1,:} = min (block,[],1);         % Min
-            T{r+2,:} = max (block,[],1);         % Max
+            blockP = P_all(idx,:);       % [*,5] = R0 R1 R2 tau1 tau2 (Ω, s)
+            blockE = RMSE_list(idx);     % [*,1] = RMSE (V)
+            block6 = [blockP, blockE];   % [*,6]
+
+            T{r  ,:} = mean(block6,1,'omitnan');     % Mean
+            T{r+1,:} = min (block6,[],1);            % Min
+            T{r+2,:} = max (block6,[],1);            % Max
         end
         r = r + 3;
     end
 
+    % ---- 저항 값을 mΩ 로 변환 (R0,R1,R2) ----
+    T{:, {'R0','R1','R2'}} = 1000 * T{:, {'R0','R1','R2'}};
+
     % 5) 누적 저장
-    all_para_hats.(base_field) = para_hats;
-    all_rmse.(base_field)      = RMSE_list;
-    all_summary.(base_field)   = T;
+    all_para_hats.(base_field) = para_hats;  % R*는 Ω
+    all_rmse.(base_field)      = RMSE_list;  % V
+    all_summary.(base_field)   = T;          % R*는 mΩ
 
     % 로그
-    fprintf('[done] %s → fitted %d segs, summary(12×5) 저장  |  counts: 90=%d,70=%d,50=%d,30=%d\n', ...
+    fprintf('[done] %s → fitted %d segs, summary(12×6) 저장  |  counts: 90=%d,70=%d,50=%d,30=%d\n', ...
         base_raw, nSeg, nnz(m90), nnz(m70), nnz(m50), nnz(m30));
     
 end
 
 fprintf("모든 파일 처리 완료!\n");
 
-save(fullfile(save_path,'2RC_results.mat'), ...
-     'all_para_hats','all_summary','-v7.3');
-fprintf('2RC 결과 저장 완료: %s\n', fullfile(save_path,'2RC_results.mat'));
+%% === ECM 평균 파라미터 테이블 (행: 셀, 열: SOC별 ECM Mean 파라미터) ===
+%   - SOC 90 → 70 → 50 → 30 순
+%   - R0, R1, R2 는 mΩ, tau1·tau2 는 그대로 (초 단위)
 
-% ─────────────────────────────────────────────────────────────────────
-% (NEW) 모든 셀 한 장: nCells(행) × 4(SOC) 그리드로 '3번째 Load(200s)'만 표시
-% ─────────────────────────────────────────────────────────────────────
-% 셀 키를 원래 파일 순서대로 정렬
-cells_in_results = fieldnames(all_para_hats);
-keys = strings(0);
+cells_in_results = fieldnames(all_summary);   % fitting 성공한 셀들
+keys = strings(0,1);
+
+% SIM 파일 순서대로 정렬된 셀 이름 리스트 생성
 for f = 1:numel(sim_files)
-    base_raw   = erase(sim_files(f).name,"_SIM.mat");
-    base_field = matlab.lang.makeValidName(base_raw);
+    base_raw   = erase(sim_files(f).name,"_SIM.mat");      % 원래 파일명 (확장자 제외)
+    base_field = matlab.lang.makeValidName(base_raw);      % struct 필드 이름
     if ismember(base_field, cells_in_results)
-        keys(end+1) = string(base_field); %#ok<AGROW>
+        keys(end+1) = string(base_raw);    % 처리된 셀만 순서대로 추가
     end
 end
-cells  = cellstr(keys);
-nCells = numel(cells);
 
-if nCells==0
-    warning('그릴 셀이 없습니다. (all_para_hats 비어있음)');
+if isempty(keys)
+    warning('ECM 테이블 생성 실패: all_summary 가 비어 있습니다.');
 else
-    % 파일 경로 매핑
-    all_paths = struct;
-    for f = 1:numel(sim_files)
-        base_raw   = erase(sim_files(f).name,"_SIM.mat");
-        base_field = matlab.lang.makeValidName(base_raw);
-        if ismember(base_field, cells)
-            all_paths.(base_field) = fullfile(folder_SIM, sim_files(f).name);
-        end
-    end
+    cellRawNames = cellstr(keys);      % 사람이 읽는 셀 이름(파일명 기반)
+    nCells       = numel(cellRawNames);
 
-    nRows = nCells; nCols = 4;  % 행=셀 개수, 열=SOC 4개
-    figAll = figure('Name','ALL CELLS – SOC별 3rd Load (200s)', ...
-                    'NumberTitle','off', ...
-                    'Position',[50 50 1600 240*nRows], 'Color','w');
-    tlAll = tiledlayout(nRows, nCols, 'TileSpacing','compact', 'Padding','compact');
+    SOC_list = [90 70 50 30];         % 열 그룹 순서
+    pNames   = {'R0','R1','R2','tau1','tau2'};
+    nP       = numel(pNames);
 
-    trueColor = [0.10 0.10 0.10];   % True(두껍게)
-    fitColor  = [0.85 0.25 0.15];   % Fitted(점선)
+    ECM_mean_matrix = nan(nCells, numel(SOC_list)*nP);
+    varNames        = strings(1, numel(SOC_list)*nP);
 
-    for r = 1:nRows
-        key = cells{r};
+    col = 0;
+    for si = 1:numel(SOC_list)
+        soc = SOC_list(si);
+        rowTag = sprintf('SOC%d_Mean', soc);     % 예: 'SOC90_Mean'
 
-        % 데이터 로드
-        if ~isfield(all_paths, key), for gg=1:nCols, nexttile; axis off; text(0.5,0.5,[key ' 경로 없음'],'HorizontalAlignment','center'); end; continue; end
-        S2 = load(all_paths.(key), "SIM_table");
-        if ~isfield(S2,"SIM_table"), for gg=1:nCols, nexttile; axis off; text(0.5,0.5,[key ' SIM_table 없음'],'HorizontalAlignment','center'); end; continue; end
-        SIM_table = S2.SIM_table;
+        for pi = 1:nP
+            col = col + 1;
+            p   = pNames{pi};
 
-        % 이 셀의 결과
-        P_hat = all_para_hats.(key);
-        RMSEv = all_rmse.(key);
-
-        % grp_code 재구성(루프와 동일)
-        nSeg = height(SIM_table);
-        grp_code = zeros(nSeg,1);        % 1:90, 2:70, 3:50, 4:30
-        if nSeg >= 32
-            blk = [1 8; 9 16; 17 24; 25 32];
-            for g = 1:4
-                ii = blk(g,1):min(blk(g,2), nSeg);
-                grp_code(ii) = g;
-            end
-        end
-        if any(grp_code==0)
-            SOC_center = mean([SIM_table.SOC1 SIM_table.SOC2], 2, 'omitnan');
-            miss = isnan(SOC_center);
-            if any(miss) && ismember('SOC_vec', SIM_table.Properties.VariableNames)
-                try, SOC_center(miss) = cellfun(@(v) mean(v,'omitnan'), SIM_table.SOC_vec(miss)); catch, end
-            end
-            valid = ~isnan(SOC_center);
-            if any(valid)
-                [~, gmin] = min(abs(SOC_center(valid) - soc_targets), [], 2);
-                vidx = find(valid);
-                grp_code(vidx) = gmin;
-            end
-        end
-
-        % 열=SOC 4개
-        for gg = 1:nCols     % 1:90, 2:70, 3:50, 4:30
-            tileIdx = (r-1)*nCols + gg;
-            nexttile(tileIdx); hold on; grid on;
-
-            idx_g = find(grp_code==gg);
-            if numel(idx_g) >= 3
-                sSel = idx_g(3);                  % '3번째' 세그먼트
-                tSel = SIM_table.time{sSel};
-                ISel = SIM_table.current{sSel};
-                VSel = SIM_table.voltage{sSel};
-                OSel = [];
-                if ismember('OCV_vec', SIM_table.Properties.VariableNames)
-                    OSel = SIM_table.OCV_vec{sSel};
-                end
-
-                Psel    = P_hat(sSel,1:3);
-                V_fitS  = RC_model_1(Psel, tSel, ISel, OSel);
-                rmse_mV = RMSEv(sSel)*1e3;
-
-                % 플롯: True(두껍게), Fitted(점선), xlim=200s
-                plot(tSel, VSel,  'LineWidth', 2.2, 'Color', trueColor);
-                plot(tSel, V_fitS,'LineWidth', 1.4, 'LineStyle','--', 'Color', fitColor);
-                if isduration(tSel), xlim([tSel(1), tSel(1) + seconds(200)]);
-                else,                xlim([min(tSel), min(tSel) + 200]); end
-
-                % 타이틀(요청 포맷 유지)
-                soc_txt = sprintf('SOC %d', soc_targets(gg));
-                title(sprintf('Load %d | %s | RMSE=%.2f mV', sSel, soc_txt, rmse_mV), 'Interpreter','none');
-
-                % 보기 좋게 여백
-                ymin = min([VSel; V_fitS]); ymax = max([VSel; V_fitS]);
-                pad  = 0.02 * max(ymax - ymin, eps); ylim([ymin - pad, ymax + pad]);
+            % 열 이름: SOC90_R0_mOhm, SOC90_R1_mOhm, ..., SOC70_tau2, ...
+            if pi <= 3
+                varNames(col) = sprintf('SOC%d_%s_mOhm', soc, p);  % R0,R1,R2 (mΩ)
             else
-                axis off;
-                soc_txt = sprintf('SOC %d', soc_targets(gg));
-                text(0.5,0.5, sprintf('%s: 3번째 Load 없음', soc_txt), ...
-                    'HorizontalAlignment','center','FontSize',11);
+                varNames(col) = sprintf('SOC%d_%s', soc, p);      % tau1,tau2 (s)
             end
 
-            % 라벨: 마지막 행만 x라벨, 첫 열만 y라벨
-            if r==nRows, xlabel('Time'); end
-            if gg==1,    ylabel('Voltage (V)'); end
-        end
-    end
+            % 각 셀에 대해 Mean 값 채우기
+            for ci = 1:nCells
+                key_field = matlab.lang.makeValidName(cellRawNames{ci});
+                T = all_summary.(key_field);        % 이 셀의 12×6 요약 table (R*는 mΩ)
 
-    % 전체 제목
-    title(tlAll, '2RC_ALL CELLS – SOC별 3rd Load(200s) Overview', 'Interpreter','none');
-
-    % 저장
-    savefig(figAll, fullfile(save_path, '2RC_ALLCELLS_SOC_3rdLoad_grid.fig'));
-    exportgraphics(figAll, fullfile(save_path, '2RC_ALLCELLS_SOC_3rdLoad_grid.png'), 'Resolution', 200);
-end
-
-%% ——— SOC별 파라미터 비교 플롯 (Capacity 색상: 파스텔 빨강→파랑) ————————————
-cells  = fieldnames(all_summary);
-SOCx   = [30 50 70 90];                 % x축 순서(오름차순)
-pNames = {'R0','R1','R2','tau1','tau2'};
-
-% ---- 용량 검증 & 정규화 ----
-if isempty(Cap_user) || numel(Cap_user) < numel(cells)
-    warning('Cap_user 길이가 cells 수(%d)와 다릅니다. 앞에서부터 맞는 것만 사용합니다.', numel(cells));
-end
-capVec = nan(numel(cells),1);
-capVec(1:min(numel(Cap_user),numel(cells))) = Cap_user(1:min(numel(Cap_user),numel(cells)));
-capMin = min(capVec,[],'omitnan');  
-capMax = max(capVec,[],'omitnan');
-if ~isfinite(capMin) || ~isfinite(capMax) || capMax<=capMin
-    capMin = 0; capMax = 1;  % 안전가드
-end
-
-% ---- 파스텔 diverging 컬러맵(더 진한 톤) : 빨강(작음) → 파랑(큼) ----
-% intensity: 0(아주 연함) ~ 1(더 진함), gamma_dark>1이면 조금 더 어둡게
-Nmap = 256;
-
-% 앵커 색상 (RGB)
-% 낮은 값: 진한 레드,  중간: 라벤더(채도 유지),  높은 값: 진한 블루
-anchors = [0.88 0.16 0.24;   % red
-           0.83 0.70 0.86;   % lavender (중앙도 색감 유지)
-           0.16 0.38 0.92];  % blue
-
-x  = [0 0.5 1];
-xi = linspace(0,1,Nmap)';
-cmap = [interp1(x, anchors(:,1), xi, 'pchip'), ...
-        interp1(x, anchors(:,2), xi, 'pchip'), ...
-        interp1(x, anchors(:,3), xi, 'pchip')];
-cmap = min(max(cmap,0),1);
-
-% HSV에서 채도/명도 보정 → 모든 구간이 어느 정도 채도 유지
-hsv = rgb2hsv(cmap);
-hsv(:,2) = max(0.35, hsv(:,2));      % 최소 채도 보장(>=0.35)
-hsv(:,2) = min(1.0, hsv(:,2)*1.20);  % 채도 소폭 증가
-hsv(:,3) = max(0.75, hsv(:,3)*0.95); % 너무 밝아지지 않게 하한 설정
-cmap = hsv2rgb(hsv);
-
-% 값 v를 [capMin,capMax] → 색으로 매핑
-mapColor = @(v) cmap( max(1, min(Nmap, 1 + round((v-capMin)/max(capMax-capMin,eps)*(Nmap-1))) ), : );
-
-customLabels = {'1_신품셀_58.94Ah', '2_1C,150cyc_47.97Ah', '3_급속/US06_52.15Ah', ...
-    '4_병렬_51.50Ah', '5_2C,10cyc_57.29Ah', '7_완속급속/US06_53.39Ah'}; 
-
-for p = 1:numel(pNames)
-    figure('Name',pNames{p}+" vs SOC (2-RC, colored by "+Cap_label+")", ...
-           'NumberTitle','off','Color','w'); hold on;
-
-    Y_all = [];
-    for c = 1:numel(cells)
-        T = all_summary.(cells{c});
-        if isempty(T) || height(T)~=12, continue; end
-
-        y = [ valOrNaN(T,"SOC30_Mean", pNames{p}), ...
-              valOrNaN(T,"SOC50_Mean", pNames{p}), ...
-              valOrNaN(T,"SOC70_Mean", pNames{p}), ...
-              valOrNaN(T,"SOC90_Mean", pNames{p}) ];
-        if all(isnan(y)), continue; end
-        Y_all = [Y_all; y]; %#ok<AGROW>
-
-        col = mapColor(capVec(c));   % 이 셀의 색상
-        if ~isempty(customLabels) && numel(customLabels)>=c
-            dname = strrep(customLabels{c}, '_', '\_');   % '_' 이스케이프
-        else
-            dname = strrep(cells{c}, '_', '\_');
-        end
-
-        plot(SOCx, y, '-o', ...
-             'LineWidth', 1.8, ...
-             'Color', col, ...
-             'MarkerFaceColor', col, ...
-             'MarkerEdgeColor', col, ...
-             'DisplayName', dname);
-    end
-
-    xlabel('SOC (%)'); ylabel(pNames{p});
-    title(pNames{p}+" vs SOC");
-    grid on;
-
-    % y축 범위 자동
-    if ~isempty(Y_all)
-        ymax = max(Y_all(:), [], 'omitnan');  
-        ymin = min(Y_all(:), [], 'omitnan');
-        if isfinite(ymax)
-            if ~isfinite(ymin) || ymin >= 0, ylim([0, ymax*1.05]);
-            else,                            ylim([ymin*0.95, ymax*1.05]);
+                val = valOrNaN(T, rowTag, p);       % 해당 SOC Mean 의 파라미터 (이미 mΩ 또는 s)
+                ECM_mean_matrix(ci, col) = val;
             end
         end
     end
 
-    % ---- 컬러바(용량 범위) ----
-    colormap(cmap);
-    cb = colorbar('Location','eastoutside');
-    cb.Label.String = Cap_label;
-    if exist('clim','builtin') || exist('clim','file')
-        clim([capMin capMax]);                % 권장 방식
-    else
-        axg = gca; if isprop(axg,'CLim'), axg.CLim = [capMin capMax]; end
-    end
-    cb.Limits = [capMin capMax];
+    varNames       = cellstr(varNames);
+    rowNames_cells = matlab.lang.makeValidName(cellRawNames);  % RowNames 용
 
-    legend('Location','best');  % 필요 시
-    savefig(gcf, fullfile(save_path, [pNames{p} '_vs_SOC_colored.fig']));
-    exportgraphics(gcf, fullfile(save_path, [pNames{p} '_vs_SOC_colored.png']), 'Resolution', 200);
+    Tbl_ECM_mean = array2table(ECM_mean_matrix, ...
+        'RowNames',      rowNames_cells, ...
+        'VariableNames', varNames);
+
+    Tbl_ECM_mean.Properties.Description = ...
+        '행: 셀(파일명) / 열: SOC별 ECM Mean 파라미터 (R*는 mΩ, tau*는 초)';
+
+    %% === SOC별 RMSE 요약 테이블 (단위: mV) ===========================
+    %   - 행: SOC90_avg, SOC90_min, SOC90_max, SOC70_..., SOC50_..., SOC30_...
+    %   - 열: 셀 이름(파일명 기반)
+
+    nSOC      = numel(SOC_list);   % 4 (90,70,50,30)
+    statNames = ["avg","min","max"];
+    nStat     = numel(statNames);  % 3
+
+    RMSE_rowNames = strings(nSOC*nStat,1);
+    for si = 1:nSOC
+        soc      = SOC_list(si);
+        rowBase  = (si-1)*nStat;
+        RMSE_rowNames(rowBase+1) = sprintf('SOC%d_avg', soc);
+        RMSE_rowNames(rowBase+2) = sprintf('SOC%d_min', soc);
+        RMSE_rowNames(rowBase+3) = sprintf('SOC%d_max', soc);
+    end
+
+    RMSE_matrix = nan(nSOC*nStat, nCells);
+
+    for ci = 1:nCells
+        key_field = matlab.lang.makeValidName(cellRawNames{ci});
+        Tcell     = all_summary.(key_field);   % 이 셀의 12×6 요약 table (RMSE는 V 단위)
+
+        for si = 1:nSOC
+            soc     = SOC_list(si);
+            rowBase = (si-1)*nStat;
+
+            tagMean = sprintf('SOC%d_Mean', soc);
+            tagMin  = sprintf('SOC%d_Min',  soc);
+            tagMax  = sprintf('SOC%d_Max',  soc);
+
+            % valOrNaN은 V 단위 → 1e3 곱해서 mV 로 변환
+            RMSE_matrix(rowBase+1, ci) = valOrNaN(Tcell, tagMean, 'RMSE') * 1e3; % avg
+            RMSE_matrix(rowBase+2, ci) = valOrNaN(Tcell, tagMin,  'RMSE') * 1e3; % min
+            RMSE_matrix(rowBase+3, ci) = valOrNaN(Tcell, tagMax,  'RMSE') * 1e3; % max
+        end
+    end
+
+    Tbl_RMSE = array2table(RMSE_matrix, ...
+        'RowNames',      cellstr(RMSE_rowNames), ...
+        'VariableNames', rowNames_cells);
+
+    Tbl_RMSE.Properties.Description = ...
+        '행: SOC별 RMSE (avg/min/max, mV) / 열: 셀(파일명)';
+
+    %% === (NEW) 선택 SOC에서 avg/min/max × 셀 요약 엑셀 생성 =========
+    %   - 네가 보내준 표 형태에 맞게 숫자만 바로 복붙 가능
+    %   - 행(15개): R0/R1/R2/τ1/τ2 × (avg, min, max)
+    %   - 열: #1, #2, ...  (cellRawNames 순서대로)
+
+    socListStr = {'SOC90','SOC70','SOC50','SOC30'};
+
+    try
+        [idxSel, tf] = listdlg( ...
+            'PromptString','어떤 SOC 파라미터를 정리할까요?', ...
+            'SelectionMode','single', ...
+            'ListString',socListStr, ...
+            'InitialValue',2);   % 기본 SOC70
+
+        if ~tf
+            warning('선택이 취소되어 SOC70을 사용합니다.');
+            idxSel = 2;
+        end
+    catch
+        % GUI 안 되는 환경 대비 콘솔 입력
+        fprintf('정리할 SOC 선택: 1=SOC90, 2=SOC70, 3=SOC50, 4=SOC30 [기본=2] : ');
+        tmp = input('','s');
+        v = str2double(tmp);
+        if isnan(v) || v<1 || v>4
+            v = 2;
+        end
+        idxSel = v;
+    end
+
+    socSelVal = SOC_list(idxSel);
+    fprintf('>> 선택된 SOC: %s (=%d%%)\n', socListStr{idxSel}, socSelVal);
+
+    % 행/열 레이블
+    statTags_full   = {'Mean','Min','Max'};
+    statTags_short  = {'avg','min','max'};
+    pNames_noRMSE   = {'R0','R1','R2','tau1','tau2'};  % 5개
+    nP2             = numel(pNames_noRMSE);
+    nStat2          = numel(statTags_full);
+    nRows_total     = nP2 * nStat2;    % 5×3 = 15
+
+    rowLabels = cell(nRows_total,1);
+    summaryMat = nan(nRows_total, nCells);
+
+    for pi = 1:nP2
+        for si2 = 1:nStat2
+            rowIdx = (pi-1)*nStat2 + si2;
+
+            % 행 이름: R0_avg, R0_min, ... , tau2_max
+            rowLabels{rowIdx} = sprintf('%s_%s', pNames_noRMSE{pi}, statTags_short{si2});
+
+            rowTag = sprintf('SOC%d_%s', socSelVal, statTags_full{si2});  % 예: SOC70_Mean
+
+            for ci2 = 1:nCells
+                key_field = matlab.lang.makeValidName(cellRawNames{ci2});
+                Tcell2    = all_summary.(key_field);   % 이 셀의 12×6 요약 table
+
+                summaryMat(rowIdx, ci2) = valOrNaN(Tcell2, rowTag, pNames_noRMSE{pi});
+            end
+        end
+    end
+
+    % 열 이름: #1, #2, ...
+    colLabels = arrayfun(@(k)sprintf('#%d',k), 1:nCells, 'UniformOutput', false);
+
+    Tbl_SOC = array2table(summaryMat, ...
+        'RowNames',      rowLabels, ...
+        'VariableNames', colLabels);
+
+    xlsx_soc = fullfile(save_path, sprintf('Param_avgminmax_byCell_SOC%d.xlsx', socSelVal));
+    if exist(xlsx_soc,'file'), delete(xlsx_soc); end
+
+    % 엑셀로 저장 (RowNames 포함)
+    writetable(Tbl_SOC, xlsx_soc, 'WriteRowNames', true);
+
+    fprintf('→ 선택 SOC=%d 에 대한 avg/min/max 요약 엑셀 생성 완료: %s\n', ...
+        socSelVal, xlsx_soc);
+
 end
 
+results_file = fullfile(save_path,'2RC_results.mat');
+if exist('Tbl_ECM_mean','var')
+    save(results_file, 'all_para_hats','all_summary','Tbl_ECM_mean','Tbl_RMSE','-v7.3');
+else
+    save(results_file, 'all_para_hats','all_summary','-v7.3');
+end
+fprintf('2RC 결과 저장 완료: %s\n', results_file);
 
 % ── 보조 함수 ─────────────────────────────────────────────────────────
 function cost = RMSE_2RC(V_true, para, t, I, OCV)
-    V_est = RC_model_2(para,t,I,OCV);    % 사용자 정의 함수가 경로에 있어야 함
+    V_est = RC_model_2(para,t,I,OCV);    
     cost  = sqrt(mean((V_true - V_est).^2));
 end
 

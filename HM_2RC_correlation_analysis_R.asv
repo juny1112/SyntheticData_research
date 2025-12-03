@@ -1,0 +1,426 @@
+%% ======================================================================
+%  2RC 요약 → SOC90/70/50/30 Mean + 스칼라(QC/2, QC/40, R1s, DCIR_1s, DCIR_10s, ΔDCIR)
+%  → 전체 피처 구성 → 상관분석 (Pearson) + Pairplot + Heatmap
+%
+%  - 입력: 2RC_results.mat (변수: all_summary), 사용자 스칼라 배열
+%  - 출력:
+%    features_allvars_full.csv   : SOC파라미터 + (원시 스칼라 + ΔDCIR) 전체
+%    features_allvars_active.csv : 분석에 실제 사용한 피처(활성 집합)
+%    corr_pearson.csv            : 상관계수 r   (활성 집합 기준)
+%    pval_pearson.csv            : p-value      (활성 집합 기준)
+%    corr_pearson.mat            : r, p, 변수명(vnames_active), 유효 셀명
+%    corrmatrix_pair_kde.(fig|png), corr_heatmap_r_p_ci.(fig|png) (활성 집합 기준)
+% ======================================================================
+clear; clc; close all;
+
+%% ── 설정(토글) ---------------------------------------------------------
+SOC_use = [90 50];   % 분석에 포함할 SOC들
+DRAW_PAIRPLOT = true;      % Pairplot 그리기 여부
+
+% ── 스칼라 활성화 토글 ────────────────────────────────────────────────
+% 분석(상관/그림)에 어떤 스칼라를 사용할지 선택:
+USE_DELTA          = true;   % ΔDCIR(=DCIR_10s - DCIR_1s)를 활성 집합에 포함
+USE_RAW_DCIR10S    = false;  % 원시 DCIR_10s를 활성 집합에 포함
+USE_RAW_DCIR1S     = true;   % 원시 DCIR_1s를 활성 집합에 포함
+% 예) ΔDCIR만 쓰고 싶으면: USE_DELTA=true, USE_RAW_DCIR10S=false, USE_RAW_DCIR1S=true(또는 false)
+
+%% ── 경로 & 데이터 로드 -------------------------------------------------
+results_mat = fullfile('G:\공유 드라이브\BSL_Data4\HNE_SOC_moving_cutoff_5_processed\SIM_parsed', ...
+    '2RC_fitting','2RC_results.mat');
+if ~isfile(results_mat)
+    error('파일을 찾을 수 없습니다: %s', results_mat);
+end
+S = load(results_mat, 'all_summary');
+if ~isfield(S,'all_summary')
+    error('all_summary 변수가 없습니다: %s', results_mat);
+end
+all_summary = S.all_summary;
+cell_names  = fieldnames(all_summary);
+nC          = numel(cell_names);
+
+save_path = 'G:\공유 드라이브\BSL_Data4\HNE_SOC_moving_cutoff_5_processed\SIM_parsed\2RC_fitting';
+if ~exist(save_path, 'dir'), mkdir(save_path); end
+
+% 파라미터 열 이름 (2RC)
+pNames = {'R0','R1','R2','tau1','tau2'};
+nP     = numel(pNames);
+
+%% ── 사용자 스칼라 입력(파일당 1개) ------------------------------------
+fprintf('셀 순서(%d개):\n', nC);
+disp(strjoin(cell_names, ', '));
+
+% 정격용량
+QC2_user      = [57.0
+52.1
+56.9
+55.7
+48.7
+53.4
+56.0
+56.1
+55.5
+50.5
+55.8]; 
+
+% p-OCV
+QC40_user     = [58.9
+53.4
+58.9
+57.3
+51.5
+54.9
+57.6
+57.6
+57.1
+52.2
+57.4];                 
+ 
+% 1초 저항
+R1s_user      = [4.52
+1.24
+2.74
+4.94
+3.56
+1.21
+2.81
+4.52
+5.62
+3.46
+2.76];
+
+% DCIR_1s (SOC 70)
+DCIR1s_user   = [4.62
+1.25
+2.75
+4.99
+3.58
+1.24
+2.83
+4.57
+5.97
+3.48
+2.79]; 
+
+% DCIR_10s (SOC 70)
+DCIR10s_user  = [4.98
+1.7
+3.13
+5.44
+4.1
+1.73
+3.2
+4.97
+6.41
+3.99
+3.17];
+
+% R
+Rcharg_user = [5.86
+3.17
+4.19
+6.67
+6.23
+4.04
+4.13
+6
+6.63
+5.5
+4.13];
+
+QC2_user     = ensureLength(QC2_user, nC);
+QC40_user    = ensureLength(QC40_user, nC);
+R1s_user     = ensureLength(R1s_user, nC);
+DCIR1s_user  = ensureLength(DCIR1s_user, nC);
+DCIR10s_user = ensureLength(DCIR10s_user, nC);
+
+%% ── 피처 이름 집합 구성 -----------------------------------------------
+SOC_use = SOC_use(:).';                                   % 행벡터
+SOC_use = SOC_use(ismember(SOC_use,[90 70 50 30]));       % 허용 SOC만
+nSOC    = numel(SOC_use);
+
+% SOC 파라미터 이름
+soc_param_names = {};
+for s = SOC_use
+    soc_param_names = [soc_param_names, strcat(pNames, ['_' num2str(s)])]; %#ok<AGROW>
+end
+
+% 스칼라 풀(원시 + ΔDCIR 모두 보존)
+scalar_pool_names = {'QC2','QC40','R1s','DCIR_1s','DCIR_10s','DCIR_delta_10s_1s'};
+
+% 활성 스칼라(분석에 사용할 실제 리스트)
+active_scalar_names = {'QC2','QC40','R1s'}; % 기본
+if USE_RAW_DCIR1S,   active_scalar_names{end+1} = 'DCIR_1s';        end
+if USE_RAW_DCIR10S,  active_scalar_names{end+1} = 'DCIR_10s';       end
+if USE_DELTA,        active_scalar_names{end+1} = 'DCIR_delta_10s_1s'; end
+
+% 전체/활성 피처 이름
+feat_full_names   = [soc_param_names, scalar_pool_names];
+feat_active_names = [soc_param_names, active_scalar_names];
+
+%% ── 피처 행렬 생성: 전체 & 활성 ---------------------------------------
+feat_full   = nan(nC, numel(feat_full_names));
+feat_active = nan(nC, numel(feat_active_names));
+
+for i = 1:nC
+    T = all_summary.(cell_names{i});
+    if isempty(T) || height(T) < 12
+        warning('(%s) 요약 테이블 형식이 예상과 다릅니다. 건너뜁니다.', cell_names{i});
+        continue;
+    end
+
+    % ── SOC 파라미터: Mean 추출
+    socvals = nan(1, numel(soc_param_names));
+    c = 1;
+    for s = SOC_use
+        rowName = sprintf('SOC%d_Mean', s);
+        for k = 1:numel(pNames)
+            socvals(c) = getVal(T, rowName, pNames{k});
+            c = c + 1;
+        end
+    end
+
+    % ── 스칼라 풀 채우기(원시+Δ)
+    dDCIR = DCIR10s_user(i) - DCIR1s_user(i);
+    scalar_vals = containers.Map( ...
+        scalar_pool_names, ...
+        {QC2_user(i), QC40_user(i), R1s_user(i), DCIR1s_user(i), DCIR10s_user(i), dDCIR} ...
+    );
+
+    % 전체(feat_full)
+    row_full = [socvals, cellfun(@(nm) scalar_vals(nm), scalar_pool_names)];
+    feat_full(i, :) = row_full;
+
+    % 활성(feat_active)
+    row_active = [socvals, cellfun(@(nm) scalar_vals(nm), active_scalar_names)];
+    feat_active(i, :) = row_active;
+end
+
+%% ── 유효 행 필터(두 행렬 공통) ----------------------------------------
+row_valid_full   = all(~isnan(feat_full),  2); % 참고: full에는 NaN 있을 수 있음
+row_valid_active = all(~isnan(feat_active),2);
+
+% 분석용은 활성 기준으로 진행
+feat_active_valid  = feat_active(row_valid_active, :);
+cells_active_valid = cell_names(row_valid_active);
+
+%% ── CSV 저장: 전체 & 활성 ---------------------------------------------
+T_full   = array2table(feat_full,   'VariableNames', feat_full_names,   'RowNames', cell_names);
+T_active = array2table(feat_active_valid, 'VariableNames', feat_active_names, 'RowNames', cells_active_valid);
+
+csv_full   = fullfile(save_path, 'features_allvars_full.csv');
+csv_active = fullfile(save_path, 'features_allvars_active.csv');
+writetable(T_full,   csv_full,   'WriteRowNames', true);
+writetable(T_active, csv_active, 'WriteRowNames', true);
+disp(['features_allvars_full.csv 저장 완료: ' csv_full]);
+disp(['features_allvars_active.csv 저장 완료: ' csv_active]);
+
+%% ── 상관분석/그림은 "활성 집합"으로만 수행 -----------------------------
+X = feat_active_valid;
+vnames_active = feat_active_names;
+
+%% ── Pairplot (대각: KDE, 비대각: 산점도+r+회귀선) ----------------------
+outfig1 = fullfile(save_path, 'corrmatrix_pair_kde.fig');
+outpng1 = fullfile(save_path, 'corrmatrix_pair_kde.png');
+
+p = size(X,2);
+if DRAW_PAIRPLOT && p >= 2
+    f1 = figure('Color','w','Position',[60 40 1300 950]);
+    [~, AX] = plotmatrix(X); % 축만 생성
+    darkBlue  = [0 0.447 0.741];
+    lightBlue = [0.35 0.65 1.00];
+
+    for ii = 1:p
+        for jj = 1:p
+            cla(AX(ii,jj));
+            set(AX(ii,jj),'Box','on','FontSize',9);
+            if ii == jj
+                xdata = X(:,ii); xdata = xdata(isfinite(xdata));
+                if numel(xdata) >= 2
+                    hold(AX(ii,jj),'on');
+                    try
+                        [f, xi] = ksdensity(xdata);
+                        fill(AX(ii,jj), xi, f, lightBlue, 'FaceAlpha', 0.5, 'EdgeColor', 'none');
+                        plot(AX(ii,jj), xi, f, '-', 'Color', darkBlue, 'LineWidth', 2.0);
+                    catch
+                    end
+                    hold(AX(ii,jj),'off');
+                    if ~isempty(xdata), xlim(AX(ii,jj), [min(xdata) max(xdata)]); end
+                end
+            else
+                x = X(:,jj); y = X(:,ii);
+                v = isfinite(x) & isfinite(y);
+                if any(v)
+                    hold(AX(ii,jj),'on');
+                    scatter(AX(ii,jj), x(v), y(v), 15, 'k', 'filled');
+                end
+                n = nnz(v);
+                if n >= 2 && std(x(v))>0 && std(y(v))>0
+                    C = corrcoef(x(v), y(v));
+                    r = C(1,2);
+                    text(AX(ii,jj), 0.05, 0.92, sprintf('r = %.2f', r), ...
+                        'Units','normalized','FontSize',10,'FontWeight','bold', ...
+                        'BackgroundColor','w','Margin',1);
+                end
+                if n >= 3 && std(x(v))>0
+                    c  = polyfit(x(v), y(v), 1);
+                    xf = linspace(min(x(v)), max(x(v)), 100);
+                    yf = polyval(c, xf);
+                    plot(AX(ii,jj), xf, yf, '-', 'Color', darkBlue, 'LineWidth', 1.7);
+                end
+                hold(AX(ii,jj),'off');
+            end
+        end
+    end
+
+    vlabels = arrayfun(@prettyVarLabel, vnames_active, 'UniformOutput', false);
+    for j = 1:p
+        xlabel(AX(p,j), vlabels{j}, 'Interpreter','tex','FontSize',10,'FontWeight','bold');
+        ylabel(AX(j,1), vlabels{j}, 'Interpreter','tex','FontSize',10,'FontWeight','bold');
+        title (AX(j,j), vlabels{j}, 'Interpreter','tex','FontSize',10,'FontWeight','bold');
+    end
+    try, sgtitle('Correlation Matrix (Pearson, pairwise)'); end
+    savefig(f1, outfig1);
+    exportgraphics(f1, outpng1, 'Resolution', 220);
+end
+
+%% ── Heatmap: r + p + 95% CI (활성 집합) --------------------------------
+outfig2 = fullfile(save_path, 'corr_heatmap_r_p_ci.fig');
+outpng2 = fullfile(save_path, 'corr_heatmap_r_p_ci.png');
+
+[Rmat, Pmat] = corr(X, 'Type','Pearson', 'Rows','pairwise');
+pN = size(Rmat,1);
+
+N  = zeros(pN); RL = nan(pN); RU = nan(pN);
+zcrit = icdf('Normal',0.975,0,1);  % 1.96
+for i = 1:pN
+    for j = 1:pN
+        v = isfinite(X(:,i)) & isfinite(X(:,j));
+        N(i,j) = nnz(v);
+        if i==j && N(i,j)>=2, RL(i,j)=1; RU(i,j)=1; continue; end
+        r = Rmat(i,j); n = N(i,j);
+        if n>=4 && ~isnan(r) && abs(r)<1
+            z  = atanh(r); se = 1/sqrt(n-3);
+            RL(i,j) = tanh(z - zcrit*se);
+            RU(i,j) = tanh(z + zcrit*se);
+        end
+    end
+end
+
+anchors = [ ...
+    0.031 0.188 0.420;  % deep blue (−1)
+    0.031 0.317 0.611;  % blue
+    0.031 0.443 0.682;  % light blue
+    0.129 0.553 0.553;  % cyan (0)
+    0.251 0.682 0.361;  % green
+    0.454 0.768 0.274]; % light green (+1)
+cmap = interp1(linspace(-1,1,size(anchors,1)), anchors, linspace(-1,1,256), 'pchip');
+
+f2 = figure('Color','w','Position',[60 40 1200 950]);
+imagesc(Rmat, [-1 1]); axis image;
+colormap(cmap); cb = colorbar; cb.Label.String = 'Pearson r';
+
+vlabels = arrayfun(@prettyVarLabel, vnames_active, 'UniformOutput', false);
+ax = gca;
+lbls = cellfun(@(c) sprintf('%s\\newline%s', c{:}), vlabels, 'UniformOutput', false);
+set(ax,'XTick',1:pN,'YTick',1:pN, ...
+       'TickLabelInterpreter','tex','FontSize',10,'FontWeight','bold');
+set(ax,'XTickLabel',lbls,'YTickLabel',lbls);
+xtickangle(ax,45);
+hold on;
+
+for k = 0.5:1:pN+0.5
+    plot([0.5 pN+0.5],[k k],'w-','LineWidth',0.5);
+    plot([k k],[0.5 pN+0.5],'w-','LineWidth',0.5);
+end
+
+for i = 1:pN
+    for j = 1:pN
+        r = Rmat(i,j); if isnan(r), continue; end
+        pval = Pmat(i,j); lo = RL(i,j); hi = RU(i,j);
+
+        idx = max(1, min(256, 1+round((r+1)/2*255)));
+        cc  = cmap(idx,:); YIQ = 0.299*cc(1)+0.587*cc(2)+0.114*cc(3);
+        tcol = [0 0 0]; if YIQ < 0.5, tcol = [1 1 1]; end
+
+        txt = sprintf('r=%.2f\np=%.3g\nCI[%.2f, %.2f]', r, pval, lo, hi);
+        text(j, i, txt, 'HorizontalAlignment','center', ...
+            'VerticalAlignment','middle','FontSize',9, ...
+            'FontWeight','bold','Color',tcol);
+
+        if isfinite(r) && abs(r) > 0.9 && i~=j
+            ydir   = get(gca,'YDir');
+            margin = 0.01;
+            if strcmpi(ydir,'reverse')
+                y = i - 0.5 + margin;
+            else
+                y = i + 0.5 - margin;
+            end
+            text(j, y, '*', 'Color',[0.85 0 0], 'FontSize',12, 'FontWeight','bold', ...
+                'HorizontalAlignment','center','VerticalAlignment','top');
+        end
+    end
+end
+title('2RC - Correlation heatmap (r, p, 95% CI; * if |r|>0.9)  [Active Set]');
+savefig(f2, outfig2);
+exportgraphics(f2, outpng2, 'Resolution', 220);
+
+%% ── 상관 행렬 저장(csv & mat) -----------------------------------------
+[R_pearson, P_pearson] = deal(Rmat, Pmat);   % 일관된 이름으로 저장
+Tcorr = array2table(R_pearson, 'VariableNames', vnames_active, 'RowNames', vnames_active);
+Tpval = array2table(P_pearson, 'VariableNames', vnames_active, 'RowNames', vnames_active);
+
+writetable(Tcorr, fullfile(save_path, 'corr_pearson.csv'), 'WriteRowNames', true);
+writetable(Tpval, fullfile(save_path, 'pval_pearson.csv'), 'WriteRowNames', true);
+save(fullfile(save_path, 'corr_pearson.mat'), 'R_pearson', 'P_pearson', 'vnames_active', 'cells_active_valid');
+
+disp('corr_pearson.csv / pval_pearson.csv / corr_pearson.mat 저장 완료');
+
+%% -------- 보조 함수 ----------------------------------------------------
+function y = getVal(T, rowName, colName)
+    if ~ismember(rowName, string(T.Properties.RowNames)), y = NaN; return; end
+    if ~ismember(colName, string(T.Properties.VariableNames)), y = NaN; return; end
+    y = T{rowName, colName}; if isempty(y), y = NaN; end
+end
+
+function v = ensureLength(v, n)
+    v = v(:).';
+    if numel(v) < n
+        v = [v, nan(1, n - numel(v))];
+    elseif numel(v) > n
+        v = v(1:n);
+    end
+end
+
+function lab = prettyVarLabel(name0)
+    % 보기 좋은 라벨(2줄: 파라미터 / (SOC xx%))
+    name = char(name0);
+    switch name
+        case 'QC2',                 lab = {'Q_{C/2}'}; return;
+        case 'QC40',                lab = {'Q_{C/40}'}; return;
+        case 'R1s',                 lab = {'R_{1s}'}; return;
+        case 'DCIR_1s',             lab = {'DCIR (1 s)'}; return;
+        case 'DCIR_10s',            lab = {'DCIR (10 s)'}; return;
+        case 'DCIR_delta_10s_1s',   lab = {'\DeltaDCIR (10-1 s)'}; return;
+    end
+    socLine = '';
+    tok = regexp(name,'_(\d+)$','tokens','once');
+    if ~isempty(tok)
+        v = str2double(tok{1});
+        if ismember(v, [90 70 50 30])
+            soc = v; %#ok<NASGU>
+            socLine = sprintf('(SOC %d%%)', v);
+            name = regexprep(name,'_(\d+)$','');
+        end
+    end
+    switch string(name)
+        case "R0",   base = 'R_{0}';
+        case "R1",   base = 'R_{1}';
+        case "R2",   base = 'R_{2}';
+        case "tau1", base = '\tau_{1}';
+        case "tau2", base = '\tau_{2}';
+        otherwise,   base = strrep(name0,'_','\_');
+    end
+    if isempty(socLine), lab = {base};
+    else, lab = {base; socLine};
+    end
+end

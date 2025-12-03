@@ -6,8 +6,11 @@ tau_min = 0.1;         % s
 tau_max = 400;          % s
 
 % θ = log10(τ) 기준 (데케이드)
-tau_mode = [0.4; 3; 88];        % s
-sigma10  = [0.230; 0.200; 0.190];  % decades
+% tau_mode = [0.4; 3; 88];        % s
+% sigma10  = [0.210; 0.200; 0.190];  % decades
+tau_mode = [3; 88];        % s
+sigma10  = [0.200; 0.190];  % decades
+
 
 [mu10, tau_mean, tau_std, tau_median, mu_n, sigma_n] = ...
     DRT_mu_sigma(tau_mode, sigma10);
@@ -19,7 +22,10 @@ T = table(tau_mode, sigma10, mu10, tau_median, tau_mean, tau_std, ...
 disp(T)
 
 A_tot = 2.0e-3;         % 총 저항 [Ω]
-w     = [1e-3 5e-2 1];% 모드 면적 비 (합이 1 아니어도 OK)
+% w     = [1e-3 5e-2 1];% 모드 면적 비 (합이 1 아니어도 OK)
+% % w     = [1e-4 2.5e-3 1] % 참고문헌
+w     = [10e-2 1]; 
+
 
 % ---------- 함수 호출 ----------
 [theta, r_mode, r_theta, dth, R, tau, g_tau, A_modes, w_used] = ...
@@ -45,7 +51,7 @@ title('$r(\theta)\ \mathrm{vs}\ \theta$');
 
 % ---------- 2) g(τ) vs τ ----------
 figure;
-loglog(tau, g_tau, 'LineWidth', 1.6); grid on
+semilogx(tau, g_tau, 'LineWidth', 1.6); grid on
 xlabel('$\tau\ (\mathrm{s})$');
 ylabel('$g(\tau)\;[\Omega/\mathrm{s}]$');
 title('$g(\tau)\ \mathrm{vs}\ \tau$');
