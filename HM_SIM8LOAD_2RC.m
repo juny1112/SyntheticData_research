@@ -16,7 +16,7 @@ clc; clear; close all;
 % ── 경로 & 파일 리스트 ───────────────────────────────────────────────
 % folder_SIM = 'G:\공유 드라이브\BSL_Data4\HNE_SOC_moving_cutoff_5_processed\SIM_parsed';
 % folder_SIM = 'G:\공유 드라이브\BSL_Data4\HNE_Integrated_6_processed\Test4(order3)\SIM_parsed';
-folder_SIM = 'G:\공유 드라이브\BSL_Data4\HNE_agedcell_8_processed\SIM_parsed\셀정렬';
+folder_SIM = 'G:\공유 드라이브\BSL_Data4\HNE_RPT_@50,70_251214_9\Driving\SIM_parsed\0degC\이름정렬';
 
 sim_files  = dir(fullfile(folder_SIM,"*_SIM.mat"));
 if isempty(sim_files)
@@ -47,7 +47,7 @@ all_summary   = struct;   % 각 파일: 12×6 요약 테이블 (R0 R1 R2 tau1 ta
                           %           R*는 mΩ, tau*는 s, RMSE는 V
 
 % 대표 SOC(정리/플롯 기준)
-soc_targets  = [90 70 50 30];
+soc_targets  = [50 70];
 soc_labels   = ["SOC90","SOC70","SOC50","SOC30"];
 rowNames     = { ...
   'SOC90_Mean','SOC90_Min','SOC90_Max', ...

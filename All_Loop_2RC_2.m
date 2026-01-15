@@ -10,7 +10,7 @@ X_true = [0.001 0.0005 0.0005 6 60];
 % ------------------------------------------------------------------
 
 % Pulse
-dt = 0.1; t_start = 0;  t_end = 10;
+dt = 1; t_start = 0;  t_end = 10;
 pulse_start = 0; pulse_end = 10;
 
 pulse.t = (t_start:dt:t_end)';       
@@ -37,7 +37,7 @@ driving_files = {pulse};
 %% ------------------------------------------------------------------
 % (C) 마르코프 노이즈 설정
 % ------------------------------------------------------------------
-epsilon_percent_span = 1;   % ±5%
+epsilon_percent_span = 0;   % ±5%
 initial_state        = 51;
 sigma                = 5;
 nSeeds               = 10;  % seed1 … seed10  (+ Non_noise)
@@ -51,6 +51,9 @@ startPts  = RandomStartPointSet('NumStartPoints',nStartPts);
 
 opt   = optimset('display','off','MaxIter',1e3,'MaxFunEvals',1e4, ...
                  'TolFun',1e-14,'TolX',1e-15);
+
+% opt   = optimset('display','off','MaxIter',1e3,'MaxFunEvals',1e4, ...
+%                  'TolFun',eps,'TolX',eps);
 
 para0 = [0.0012 0.0006 0.0004 5 70];      % 초기 guess
 lb    = [0 0 0 0.001 0.001];

@@ -1,11 +1,12 @@
 %% ======================================================================
-%  2RC(Tbl_ECM_mean) + 스칼라 → 피처 구성 → 상관분석 (Pearson)
+%  2RC(US06: Tbl_US06_ECM) + 스칼라(온도별 DCIR/Power 포함) → 피처 구성 → 상관분석 (Pearson)
 %  - 입력:
-%       2RC_results.mat (Tbl_ECM_mean 포함)
-%          * Tbl_ECM_mean.RowNames : 셀 이름
-%          * Tbl_ECM_mean.VarNames: SOC90_R0_mOhm, SOC90_R1_mOhm, ..., SOC30_tau2
-%       사용자 스칼라(QC/2, QC/40, R1s, DCIR_1s, DCIR_10s, ΔDCIR, Rcharg,
-%                    Rcharg_80_90_avg)
+%       2RC_results.mat (Tbl_US06_ECM 포함)
+%          * Tbl_US06_ECM.RowNames : 셀 이름
+%          * Tbl_US06_ECM.VarNames: SOC70_R0_mOhm, SOC70_R1_mOhm, ..., SOC50_tau2
+%       사용자 스칼라:
+%          QC/2, QC/40, R1s, Rcharg, Rcharg_80_90_avg,
+%          DCIR_1s_Txx, DCIR_delta_10s_1s_Txx (온도별), Power_Txx (온도별)
 %  - 출력( save_path ):
 %    features_allvars_full.csv / features_allvars_active.csv
 %    corr_pearson.csv / pval_pearson.csv / corr_pearson.mat
@@ -14,34 +15,44 @@
 clear; clc; close all;
 
 %% ── 설정(토글) ---------------------------------------------------------
-SOC_use = [70];           % 분석에 포함할 SOC들 (예: [90 70 50 30], [90 50] 등)
+SOC_use = [50 70];           % 분석에 포함할 SOC들 (예: [70], [70 50] 등)
 DRAW_PAIRPLOT = true;     % Pairplot 그리기 여부
 
-% 스칼라 활성화 토글
-USE_DELTA          = true;   % ΔDCIR(=DCIR_10s - DCIR_1s 또는 직접 입력)
-USE_RAW_DCIR10S    = false;  % DCIR_10s
-USE_RAW_DCIR1S     = true;   % DCIR_1s
-USE_RCHARG         = false;   % Rcharg
-USE_R1S            = true;   % R1s
-USE_RCHARG_8090    = false;   % Rcharg_80_90_avg  (추가)
+% 온도 리스트 (요청: 45 35 20 10 0도)
+TEMP_list = [45 35 20 10 0];
+
+% 스칼라 활성화 토글(기본)
+USE_DELTA            = true;    % ΔDCIR(=DCIR_10s - DCIR_1s 또는 직접 입력)
+USE_RAW_DCIR10S      = false;   % DCIR_10s (온도별도 지원, 기본 off)
+USE_RAW_DCIR1S       = true;    % DCIR_1s (온도별)
+USE_RCHARG           = true;   % Rcharg
+USE_R1S              = true;    % R1s
+USE_RCHARG_8090      = true;   % Rcharg_80_90_avg
+USE_POWER            = true;    % Power (온도별)
+
+% 온도별 토글(전체 온도에 동일 적용) — 필요하면 아래를 TEMP별로 쪼개도 됨
+USE_DCIR1S_BYTEMP    = USE_RAW_DCIR1S;
+USE_DDELTA_BYTEMP    = USE_DELTA;
+USE_DCIR10S_BYTEMP   = USE_RAW_DCIR10S;
+USE_POWER_BYTEMP     = USE_POWER;
 
 %% ── 경로/파일 ----------------------------------------------------------
-% 2RC_results.mat (Tbl_ECM_mean 사용)
+% 2RC_results.mat (US06: Tbl_US06_ECM 사용)
 matPath   = "G:\공유 드라이브\BSL_Data4\HNE_RPT_@50,70_251214_9\Driving\SIM_parsed\20degC\2RC_fitting\2RC_results.mat";
 
 % 결과 저장 경로
 save_path = 'G:\공유 드라이브\BSL_Data4\HNE_RPT_@50,70_251214_9\Driving\SIM_parsed\Correlation_Anlaysis';
 if ~exist(save_path, 'dir'), mkdir(save_path); end
 
-%% ── Tbl_ECM_mean 로드 & 2RC 파라미터 구성 -----------------------------
-S = load(matPath, 'Tbl_ECM_mean');
-if ~isfield(S,'Tbl_ECM_mean')
-    error('Tbl_ECM_mean 이 %s 에서 발견되지 않았습니다.', matPath);
+%% ── Tbl_US06_ECM 로드 & 2RC 파라미터 구성 -----------------------------
+S = load(matPath, 'Tbl_US06_ECM');
+if ~isfield(S,'Tbl_US06_ECM')
+    error('Tbl_US06_ECM 이 %s 에서 발견되지 않았습니다.', matPath);
 end
-Tbl_ECM_mean = S.Tbl_ECM_mean;
+Tbl_US06_ECM = S.Tbl_US06_ECM;
 
 % 셀 이름
-cell_names = Tbl_ECM_mean.Properties.RowNames;
+cell_names = Tbl_US06_ECM.Properties.RowNames;
 if isstring(cell_names)
     cell_names = cellstr(cell_names);
 elseif ischar(cell_names)
@@ -49,8 +60,8 @@ elseif ischar(cell_names)
 end
 nC = numel(cell_names);
 
-% SOC 리스트를 VarNames 에서 자동 추출 (SOC90_..., SOC50_... 이런 형태)
-vnames = Tbl_ECM_mean.Properties.VariableNames;
+% SOC 리스트를 VarNames 에서 자동 추출 (SOC70_..., SOC50_... 이런 형태)
+vnames = Tbl_US06_ECM.Properties.VariableNames;
 soc_list = [];
 for i = 1:numel(vnames)
     tok = regexp(vnames{i}, '^SOC(\d+)_', 'tokens', 'once');
@@ -58,9 +69,9 @@ for i = 1:numel(vnames)
         soc_list(end+1) = str2double(tok{1}); %#ok<AGROW>
     end
 end
-SOC_2RC = unique(soc_list, 'stable');  % 예: [90 70 50 30]
+SOC_2RC = unique(soc_list, 'stable');  % 예: [70 50]
 if isempty(SOC_2RC)
-    error('Tbl_ECM_mean VarNames 에 "SOCxx_..." 형식의 변수를 찾지 못했습니다.');
+    error('Tbl_US06_ECM VarNames 에 "SOCxx_..." 형식의 변수를 찾지 못했습니다.');
 end
 
 % 표준 파라미터 이름
@@ -73,9 +84,9 @@ for k = 1:numel(pNames_2RC)
     P2RC.(pNames_2RC{k}) = nan(nC, nSOC_all);
 end
 
-% Tbl_ECM_mean → P2RC 채우기
+% Tbl_US06_ECM → P2RC 채우기
 for sIdx = 1:nSOC_all
-    soc = SOC_2RC(sIdx);          % 예: 90, 70, 50, 30
+    soc = SOC_2RC(sIdx);
     for pi = 1:numel(pNames_2RC)
         pname = pNames_2RC{pi};
         if pi <= 3
@@ -87,34 +98,40 @@ for sIdx = 1:nSOC_all
         end
 
         if ~ismember(varName, vnames)
-            warning('Tbl_ECM_mean 에 변수 %s 가 없습니다. (SOC=%d, param=%s)', varName, soc, pname);
+            warning('Tbl_US06_ECM 에 변수 %s 가 없습니다. (SOC=%d, param=%s)', varName, soc, pname);
         else
-            P2RC.(pname)(:, sIdx) = Tbl_ECM_mean{:, varName};
+            P2RC.(pname)(:, sIdx) = Tbl_US06_ECM{:, varName};
         end
     end
 end
 
 %% ── SOC 선택/정합 ------------------------------------------------------
 SOC_use = SOC_use(:).';
-SOC_use = SOC_use(ismember(SOC_use, SOC_2RC));     % Tbl_ECM_mean에 존재하는 SOC만
+SOC_use = SOC_use(ismember(SOC_use, SOC_2RC));     % Tbl_US06_ECM에 존재하는 SOC만
 if isempty(SOC_use)
-    error('선택한 SOC(%s)가 Tbl_ECM_mean 데이터에 존재하지 않습니다. (SOC_2RC=%s)', ...
+    error('선택한 SOC(%s)가 Tbl_US06_ECM 데이터에 존재하지 않습니다. (SOC_2RC=%s)', ...
         mat2str(SOC_use), mat2str(SOC_2RC));
 end
 idxSOC_2RC = arrayfun(@(s)find(SOC_2RC==s,1), SOC_use);
 nSOC = numel(SOC_use);
 
-% SOC별 파라미터명 구성 (예: R0_90, R1_90, ..., tau2_50 ...)
+% SOC별 파라미터명 구성 (예: R0_70, R1_70, ..., tau2_70 ...)
 soc_param_names_2RC = {};
 for s = SOC_use
     soc_param_names_2RC = [soc_param_names_2RC, strcat(pNames_2RC, ['_' num2str(s)])]; %#ok<AGROW>
 end
 
-%% ── 사용자 스칼라 입력(셀 순서=Tbl_ECM_mean Row 순서) ------------------
+%% ── 사용자 스칼라 입력(셀 순서=Tbl_US06_ECM Row 순서) ------------------
 fprintf('셀 순서(%d개):\n', nC);
 disp(strjoin(cell_names, ', '));
 
-% ⚠ 여기 스칼라 값들은 cell_names 순서와 맞아야 함
+% ======================================================================
+% [여기부터 "입력 받아주는 구간"]
+% - 반드시 cell_names 순서와 동일한 길이(nC)로 넣어야 함
+% - 길이 안 맞으면 ensureLength가 자르거나 NaN을 뒤에 채움
+% ======================================================================
+
+% (기본 스칼라) ----------------------------------------------------------
 QC2_user      = [56.14
 55.93
 52.55
@@ -141,23 +158,6 @@ QC40_user     = [57.49
 57.18
 58.4];
 
-DCIR1s_user   = [0.99
-0.95
-1.37
-1.31
-1.47
-1.29
-1.04
-0.98
-2.36
-1.02
-0.98
-2.53
-1.02];
-
-% DCIR10s 가 없으면 NaN으로 두고, ΔDCIR에서만 사용 가능하게 처리
-DCIR10s_user  = nan(nC,1);
-
 Rcharg_user   = [2.72
 2.43
 3.51
@@ -169,7 +169,6 @@ Rcharg_user   = [2.72
 5.10
 2.63
 2.61
-3.43
 2.63];
 
 R1s_user      = [1.16
@@ -185,23 +184,6 @@ R1s_user      = [1.16
 1.13
 1.10];
 
-% ΔDCIR (= DCIR_10s - DCIR_1s) 를 직접 넣고 싶으면 여기 입력
-DCIRdelta_user = [0.28
-0.26
-0.4
-0.37
-0.33
-0.37
-0.27
-0.26
-0.81
-0.23
-0.26
-0.79
-0.26];
-
-% 추가: Rcharg_80_90_avg (셀 순서 동일, [nC x 1] 값으로 채워넣기)
-% 일단 NaN으로 초기화 -> 실제 값으로 교체해서 사용
 Rcharg_80_90_avg_user = [2.75
 2.41
 4.43
@@ -213,47 +195,305 @@ Rcharg_80_90_avg_user = [2.75
 8.36
 2.52
 2.49
-8.45
 2.72];
-% 예시로 직접 입력하려면 아래처럼 교체 가능
-% Rcharg_80_90_avg_user = [ ... nC개 값 ... ];
 
-% 길이 보정
-QC2_user            = ensureLength(QC2_user,            nC);
-QC40_user           = ensureLength(QC40_user,           nC);
-DCIR1s_user         = ensureLength(DCIR1s_user,         nC);
-DCIR10s_user        = ensureLength(DCIR10s_user,        nC);
-Rcharg_user         = ensureLength(Rcharg_user,         nC);
-R1s_user            = ensureLength(R1s_user,            nC);
-DCIRdelta_user      = ensureLength(DCIRdelta_user,      nC);
-Rcharg_80_90_avg_user = ensureLength(Rcharg_80_90_avg_user, nC);
+% (온도별 DCIR / Power) --------------------------------------------------
+% - DCIR_1s_Txx_user       : 온도 xx도의 DCIR 1초
+% - DCIRdelta_Txx_user     : 온도 xx도의 ΔDCIR(10-1초) (직접 입력)
+% - DCIR10s_Txx_user       : (옵션) 온도 xx도의 DCIR 10초 (없으면 NaN 유지)
+% - Power_Txx_user         : 온도 xx도의 Power (단위는 네 데이터 기준 그대로 넣어도 됨)
 
-%% ── DCIR 사용 가능 여부 체크 (보호 로직) -------------------------------
-%  - DCIR_10s도 없고 ΔDCIR도 다 NaN이면: 두 피처 다 끄기
-%  - DCIR_10s만 없고 ΔDCIR는 있으면: 10s만 끄고 ΔDCIR는 그대로 사용
-if all(~isfinite(DCIR10s_user)) && all(~isfinite(DCIRdelta_user))
-    warning('DCIR_10s와 ΔDCIR 값이 모두 NaN 입니다. USE_RAW_DCIR10S / USE_DELTA 를 자동으로 false로 변경합니다.');
-    USE_RAW_DCIR10S = false;
-    USE_DELTA       = false;
-elseif all(~isfinite(DCIR10s_user))
-    warning('DCIR_10s 값이 모두 NaN 입니다. USE_RAW_DCIR10S 만 false로 변경하고, ΔDCIR(직접 입력값)은 그대로 사용합니다.');
-    USE_RAW_DCIR10S = false;
-    % USE_DELTA는 그대로 둠 (직접 넣은 ΔDCIR 사용)
-end
+% 45도
+DCIR1s_T45_user     = [0.70 
+0.69 
+1.03 
+0.85 
+0.85 
+0.80 
+0.70 
+0.80 
+1.61 
+0.63 
+0.73 
+0.73  ];
+
+DCIR10s_T45_user    = nan(nC,1);
+
+DCIRdelta_T45_user  = [0.27 
+0.27 
+0.31 
+0.32 
+0.29 
+0.32 
+0.28 
+0.27 
+0.55 
+0.27 
+0.27 
+0.27 ];
+
+Power_T45_user      = [3070.96 
+3122.62 
+2220.93 
+2526.49 
+2599.85 
+2642.55 
+3042.75 
+2796.45 
+1372.85 
+3316.18 
+2976.85 
+2993.30  ];
+
+% 35도
+DCIR1s_T35_user     = [0.81 
+0.77 
+1.19 
+0.99 
+0.98 
+0.90 
+0.79 
+0.88 
+1.89 
+0.72 
+0.82 
+0.81 ];
+
+DCIR10s_T35_user    = nan(nC,1);
+
+DCIRdelta_T35_user  = [0.30 
+0.29 
+0.35 
+0.35 
+0.32 
+0.35 
+0.29 
+0.29 
+0.58 
+0.29 
+0.29 
+0.29 ];
+
+Power_T35_user      = [2680.64 
+2813.73 
+1934.89 
+2213.15 
+2294.82 
+2365.99 
+2761.76 
+2541.74 
+1195.84 
+2964.25 
+2673.08 
+2725.46 ];
+
+% 20도 (일단 여기만 채워도 됨)
+DCIR1s_T20_user     = [1.17 
+1.07 
+1.67 
+1.27 
+1.39 
+1.23 
+1.03 
+1.17 
+2.84 
+0.78 
+1.16 
+1.12 ];  % 예시(네 기존값)
+
+DCIR10s_T20_user    = nan(nC,1); % 없으면 NaN 유지
+
+DCIRdelta_T20_user  = [0.29 
+0.27 
+0.40 
+0.35 
+0.31 
+0.34 
+0.28 
+0.28 
+0.82 
+0.28 
+0.28 
+0.27 ];  % 예시(네 기존값)
+
+Power_T20_user      = [1966.29 
+2148.17 
+1384.54 
+1760.16 
+1673.50 
+1796.91 
+2190.84 
+1986.73 
+770.17 
+2731.95 
+1996.96 
+2075.03 ]; % <- 여기 Power 값 넣어줘
+
+% 10도
+DCIR1s_T10_user     = [1.72 
+1.48 
+2.34 
+1.88 
+2.01 
+1.76 
+1.48 
+1.61 
+4.17 
+1.23 
+1.65 
+1.59 ];
+
+DCIR10s_T10_user    = nan(nC,1);
+
+DCIRdelta_T10_user  = [0.35 
+0.31 
+0.46 
+0.40 
+0.37 
+0.40 
+0.32 
+0.32 
+0.90 
+0.33 
+0.33 
+0.32 ];
+
+Power_T10_user      = [1384.03 
+1603.71 
+1020.97 
+1242.42 
+1199.89 
+1306.61 
+1596.86 
+1492.22 
+553.86 
+1840.07 
+1446.86 
+1503.46 ];
+
+% 0도
+DCIR1s_T0_user      = [2.37 
+2.28 
+3.78 
+2.93 
+3.11 
+3.46 
+2.37 
+2.45 
+6.54 
+2.20 
+2.29 
+2.71 ];
+
+DCIR10s_T0_user     = nan(nC,1);
+
+DCIRdelta_T0_user   = [0.39 
+0.37 
+0.54 
+0.48 
+0.44 
+0.51 
+0.36 
+0.38 
+1.03 
+0.40 
+0.37 
+0.39 ];
+
+Power_T0_user       = [1034.84 
+1078.04 
+656.79 
+829.19 
+798.23 
+708.00 
+1046.83 
+1009.51 
+367.54 
+1101.57 
+1075.59 
+921.66 ];
+
+% ======================================================================
+% [입력 구간 끝]
+% ======================================================================
+
+% 길이 보정(기본 스칼라)
+QC2_user               = ensureLength(QC2_user,               nC);
+QC40_user              = ensureLength(QC40_user,              nC);
+Rcharg_user            = ensureLength(Rcharg_user,            nC);
+R1s_user               = ensureLength(R1s_user,               nC);
+Rcharg_80_90_avg_user  = ensureLength(Rcharg_80_90_avg_user,  nC);
+
+% 길이 보정(온도별)
+DCIR1s_T45_user    = ensureLength(DCIR1s_T45_user,    nC);
+DCIR10s_T45_user   = ensureLength(DCIR10s_T45_user,   nC);
+DCIRdelta_T45_user = ensureLength(DCIRdelta_T45_user, nC);
+Power_T45_user     = ensureLength(Power_T45_user,     nC);
+
+DCIR1s_T35_user    = ensureLength(DCIR1s_T35_user,    nC);
+DCIR10s_T35_user   = ensureLength(DCIR10s_T35_user,   nC);
+DCIRdelta_T35_user = ensureLength(DCIRdelta_T35_user, nC);
+Power_T35_user     = ensureLength(Power_T35_user,     nC);
+
+DCIR1s_T20_user    = ensureLength(DCIR1s_T20_user,    nC);
+DCIR10s_T20_user   = ensureLength(DCIR10s_T20_user,   nC);
+DCIRdelta_T20_user = ensureLength(DCIRdelta_T20_user, nC);
+Power_T20_user     = ensureLength(Power_T20_user,     nC);
+
+DCIR1s_T10_user    = ensureLength(DCIR1s_T10_user,    nC);
+DCIR10s_T10_user   = ensureLength(DCIR10s_T10_user,   nC);
+DCIRdelta_T10_user = ensureLength(DCIRdelta_T10_user, nC);
+Power_T10_user     = ensureLength(Power_T10_user,     nC);
+
+DCIR1s_T0_user     = ensureLength(DCIR1s_T0_user,     nC);
+DCIR10s_T0_user    = ensureLength(DCIR10s_T0_user,    nC);
+DCIRdelta_T0_user  = ensureLength(DCIRdelta_T0_user,  nC);
+Power_T0_user      = ensureLength(Power_T0_user,      nC);
+
+%% ── DCIR 사용 가능 여부 체크 (온도별 보호 로직) -------------------------
+%  - DCIR_10s도 없고 ΔDCIR도 다 NaN이면: ΔDCIR 토글을 강제로 끄는 대신,
+%    해당 온도 피처가 활성화돼있더라도 NaN이라면 이후 row_valid에서 빠질 수 있음
+%  - 네가 "온도별 DCIR이 존재"한다고 했으니, 여기서는 경고만 하고 토글 자동 변경은 하지 않음
+
+% 온도별 데이터 컨테이너 구성(이름 기반 접근용)
+DCIR1s_byT    = struct('T45',DCIR1s_T45_user,'T35',DCIR1s_T35_user,'T20',DCIR1s_T20_user,'T10',DCIR1s_T10_user,'T0',DCIR1s_T0_user);
+DCIR10s_byT   = struct('T45',DCIR10s_T45_user,'T35',DCIR10s_T35_user,'T20',DCIR10s_T20_user,'T10',DCIR10s_T10_user,'T0',DCIR10s_T0_user);
+DCIRd_byT     = struct('T45',DCIRdelta_T45_user,'T35',DCIRdelta_T35_user,'T20',DCIRdelta_T20_user,'T10',DCIRdelta_T10_user,'T0',DCIRdelta_T0_user);
+Power_byT     = struct('T45',Power_T45_user,'T35',Power_T35_user,'T20',Power_T20_user,'T10',Power_T10_user,'T0',Power_T0_user);
 
 %% ── 피처명 구성 --------------------------------------------------------
-scalar_pool_names   = {'QC2','QC40','DCIR_1s','DCIR_10s', ...
-                       'DCIR_delta_10s_1s','Rcharg','R1s', ...
-                       'Rcharg_80_90_avg'};    % ★ 추가
+% 스칼라 풀(전체 CSV에 포함될 후보들)
+scalar_pool_names = {'QC2','QC40','Rcharg','R1s','Rcharg_80_90_avg'};
+
+% 온도별 후보명 추가
+for t = TEMP_list
+    scalar_pool_names{end+1} = sprintf('DCIR_1s_T%d', t);            %#ok<AGROW>
+    scalar_pool_names{end+1} = sprintf('DCIR_10s_T%d', t);           %#ok<AGROW>
+    scalar_pool_names{end+1} = sprintf('DCIR_delta_10s_1s_T%d', t);  %#ok<AGROW>
+    scalar_pool_names{end+1} = sprintf('Power_T%d', t);              %#ok<AGROW>
+end
 
 % active: 순서는 여기서 조정
 active_scalar_names = {'QC2','QC40'};
-if USE_RAW_DCIR1S,      active_scalar_names{end+1} = 'DCIR_1s';           end
-if USE_RAW_DCIR10S,     active_scalar_names{end+1} = 'DCIR_10s';          end
-if USE_DELTA,           active_scalar_names{end+1} = 'DCIR_delta_10s_1s'; end
-if USE_RCHARG,          active_scalar_names{end+1} = 'Rcharg';            end
-if USE_R1S,             active_scalar_names{end+1} = 'R1s';               end
-if USE_RCHARG_8090,     active_scalar_names{end+1} = 'Rcharg_80_90_avg';  end
+if USE_RCHARG,          active_scalar_names{end+1} = 'Rcharg';           end
+if USE_R1S,             active_scalar_names{end+1} = 'R1s';              end
+if USE_RCHARG_8090,     active_scalar_names{end+1} = 'Rcharg_80_90_avg'; end
+
+% 온도별 active 추가
+for t = TEMP_list
+    if USE_DCIR1S_BYTEMP
+        active_scalar_names{end+1} = sprintf('DCIR_1s_T%d', t); %#ok<AGROW>
+    end
+    if USE_DCIR10S_BYTEMP
+        active_scalar_names{end+1} = sprintf('DCIR_10s_T%d', t); %#ok<AGROW>
+    end
+    if USE_DDELTA_BYTEMP
+        active_scalar_names{end+1} = sprintf('DCIR_delta_10s_1s_T%d', t); %#ok<AGROW>
+    end
+    if USE_POWER_BYTEMP
+        active_scalar_names{end+1} = sprintf('Power_T%d', t); %#ok<AGROW>
+    end
+end
 
 feat_full_names   = [soc_param_names_2RC, scalar_pool_names];
 feat_active_names = [soc_param_names_2RC, active_scalar_names];
@@ -274,30 +514,42 @@ for i = 1:nC
         end
     end
 
-    % ΔDCIR: 우선순위
-    %  1) DCIRdelta_user(i) 가 finite면 그 값 사용
-    %  2) 아니면 DCIR10s_user, DCIR1s_user 둘 다 finite면 10s - 1s
-    %  3) 아니면 NaN
-    if isfinite(DCIRdelta_user(i))
-        dDCIR = DCIRdelta_user(i);
-    elseif isfinite(DCIR10s_user(i)) && isfinite(DCIR1s_user(i))
-        dDCIR = DCIR10s_user(i) - DCIR1s_user(i);
-    else
-        dDCIR = NaN;
-    end
+    % 스칼라 Map (키: scalar_pool_names 전체를 채움)
+    scalar_vals = containers.Map();
 
-    % 스칼라 Map (키 순서 = scalar_pool_names 순서)
-    scalar_vals = containers.Map( ...
-        scalar_pool_names, ...
-        {QC2_user(i), ...                 % 'QC2'
-         QC40_user(i), ...                % 'QC40'
-         DCIR1s_user(i), ...              % 'DCIR_1s'
-         DCIR10s_user(i), ...             % 'DCIR_10s'
-         dDCIR, ...                       % 'DCIR_delta_10s_1s'
-         Rcharg_user(i), ...              % 'Rcharg'
-         R1s_user(i), ...                 % 'R1s'
-         Rcharg_80_90_avg_user(i)} ...   % 'Rcharg_80_90_avg'
-    );
+    % 기본 스칼라
+    scalar_vals('QC2')               = QC2_user(i);
+    scalar_vals('QC40')              = QC40_user(i);
+    scalar_vals('Rcharg')            = Rcharg_user(i);
+    scalar_vals('R1s')               = R1s_user(i);
+    scalar_vals('Rcharg_80_90_avg')  = Rcharg_80_90_avg_user(i);
+
+    % 온도별 스칼라(DCIR/Power)
+    for t = TEMP_list
+        keyT = sprintf('T%d', t);
+
+        d1  = DCIR1s_byT.(keyT)(i);
+        d10 = DCIR10s_byT.(keyT)(i);
+        dd  = DCIRd_byT.(keyT)(i);
+        pw  = Power_byT.(keyT)(i);
+
+        % ΔDCIR: 우선순위
+        %  1) DCIRdelta_Txx_user(i) 가 finite면 그 값 사용
+        %  2) 아니면 DCIR10s_Txx_user, DCIR1s_Txx_user 둘 다 finite면 10s - 1s
+        %  3) 아니면 NaN
+        if isfinite(dd)
+            dDCIR = dd;
+        elseif isfinite(d10) && isfinite(d1)
+            dDCIR = d10 - d1;
+        else
+            dDCIR = NaN;
+        end
+
+        scalar_vals(sprintf('DCIR_1s_T%d', t))           = d1;
+        scalar_vals(sprintf('DCIR_10s_T%d', t))          = d10;
+        scalar_vals(sprintf('DCIR_delta_10s_1s_T%d', t)) = dDCIR;
+        scalar_vals(sprintf('Power_T%d', t))             = pw;
+    end
 
     % 전체/활성 피처 행
     row_full   = [socvals_2RC, cellfun(@(nm) scalar_vals(nm), scalar_pool_names)];
@@ -452,7 +704,8 @@ for i = 1:pN
         cc  = cmap(idx,:); YIQ = 0.299*cc(1)+0.587*cc(2)+0.114*cc(3);
         tcol = [0 0 0]; if YIQ < 0.5, tcol = [1 1 1]; end
 
-        txt = sprintf('r=%.2f\np=%.3g\nCI[%.2f, %.2f]', r, pval, lo, hi);
+        % txt = sprintf('r=%.2f\np=%.3g\nCI[%.2f, %.2f]', r, pval, lo, hi);
+        txt = sprintf('r=%.2f\np=%.3g', r, pval);
         text(j, i, txt, 'HorizontalAlignment','center', ...
             'VerticalAlignment','middle','FontSize',9, ...
             'FontWeight','bold','Color',tcol);
@@ -467,7 +720,7 @@ for i = 1:pN
         end
     end
 end
-title('2RC - Correlation heatmap (r, p, 95% CI; * if |r|>0.9)');
+title('US06(2RC) - Correlation heatmap (r, p, 95% CI; * if |r|>0.9)');
 savefig(f2, outfig2);
 exportgraphics(f2, outpng2, 'Resolution', 220);
 
@@ -494,25 +747,47 @@ end
 
 function lab = prettyVarLabel(name0)
     name = char(name0);
+
+    % 기본 스칼라
     switch name
         case 'QC2',                 lab = {'Q_{C/2}'}; return;
         case 'QC40',                lab = {'Q_{C/40}'}; return;
         case 'R1s',                 lab = {'R_{1s}'}; return;
         case 'Rcharg',              lab = {'R_{charg}'}; return;
         case 'Rcharg_80_90_avg',    lab = {'R_{charg,80-90}','(avg)'}; return;
-        case 'DCIR_1s',             lab = {'DCIR (1 s)'}; return;
-        case 'DCIR_10s',            lab = {'DCIR (10 s)'}; return;
-        case 'DCIR_delta_10s_1s',   lab = {'\DeltaDCIR (10-1 s)'}; return;
     end
-    socLine = '';
-    tok = regexp(name,'_(\d+)$','tokens','once');
+
+    % 온도별 스칼라 (DCIR/Power)
+    tokT = regexp(name,'_(T\d+)$','tokens','once');
+    if isempty(tokT)
+        tokT = regexp(name,'_T(\d+)$','tokens','once');
+    end
+
+    % DCIR_1s_T20 / DCIR_delta_10s_1s_T20 / Power_T20 같은 형식
+    tok = regexp(name,'^(DCIR_1s|DCIR_10s|DCIR_delta_10s_1s|Power)_T(\d+)$','tokens','once');
     if ~isempty(tok)
-        v = str2double(tok{1});
-        if ismember(v, [90 70 50 30])
-            socLine = sprintf('(SOC %d%%)', v);
-            name = regexprep(name,'_(\d+)$','');
+        baseKey = tok{1};
+        Tval    = str2double(tok{2});
+        switch baseKey
+            case 'DCIR_1s',              base = 'DCIR (1 s)';
+            case 'DCIR_10s',             base = 'DCIR (10 s)';
+            case 'DCIR_delta_10s_1s',    base = '\DeltaDCIR (10-1 s)';
+            case 'Power',                base = 'Power';
+            otherwise,                   base = strrep(name0,'_','\_');
         end
+        lab = {base; sprintf('(T %d^{\\circ}C)', Tval)};
+        return
     end
+
+    % SOC 파라미터: R0_70, tau2_50 등
+    socLine = '';
+    tokS = regexp(name,'_(\d+)$','tokens','once');
+    if ~isempty(tokS)
+        v = str2double(tokS{1});
+        socLine = sprintf('(SOC %d%%)', v);
+        name = regexprep(name,'_(\d+)$','');
+    end
+
     switch string(name)
         case "R0",   base = 'R_{0}';
         case "R1",   base = 'R_{1}';
