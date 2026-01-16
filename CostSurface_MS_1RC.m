@@ -20,22 +20,24 @@ for fileIdx = 1:length(driving_files)
     data = readtable(driving_files{fileIdx});
     t_vec = data.Var1;    % [sec]
     I_vec = data.Var2;    % [A]
+    N = numel(t_vec);
+    OCV = zeros(N, 1);
 
     % 초기 모델 전압 생성 및 저장
     X0    = [0.001, 0.001, 60];   % [R0, R1, τ1]
-    V_est = RC_model_1(X0, t_vec, I_vec);
+    V_est = RC_model_1(X0, t_vec, I_vec, OCV);
     save(sprintf('load%d_data.mat', fileIdx), 't_vec', 'I_vec', 'V_est');
 
     % Markov Noise 생성
-    eps_span = 5; 
-    init_state = 51; 
-    sigma = 0.005; 
-    numSeeds = 10;
+    epsilon_percent_span = 5;     % ±1 %
+    initial_state = 51;
+    sigma         = 5;
+    nSeeds        = 10;
 
-    for s = 1:numSeeds
+    for s = 1:nSeeds
         rng(s);
-        [noisy, ~, ~, ~, ~, ~] = MarkovNoise(V_est, eps_span, init_state, sigma);
-        noisedata.(sprintf('V_SD%d', s)) = noisy;
+        [noisy,~,~,~,~,~] = MarkovNoise_idx(V_est, epsilon_percent_span, initial_state, sigma);
+        noisedata.(sprintf('V_SD%d',s)) = noisy;
     end
     save(sprintf('noise_load%d_seed10.mat', fileIdx), '-struct', 'noisedata');
 
@@ -48,11 +50,11 @@ for fileIdx = 1:length(driving_files)
          'MaxFunctionEvaluations', 1e4, 'TolFun', 1e-14, 'TolX', 1e-15, ...
          'OutputFcn', @plotIter);
 
-    results = zeros(numSeeds, numel(p0)+2);  % [R1, τ1, exitflag, iterations]
+    results = zeros(nSeeds, numel(p0)+2);  % [R1, τ1, exitflag, iterations]
     startPts = RandomStartPointSet('NumStartPoints', 20);
 
     % Seed별 최적화
-    for i = 1:numSeeds
+    for i = 1:nSeeds
         V_SD = noisedata.(sprintf('V_SD%d', i));
 
         % 1) Cost-surface 계산
@@ -61,7 +63,7 @@ for fileIdx = 1:length(driving_files)
         cost_surf = zeros(numel(tau1_vec), numel(R1_vec));
         for ii = 1:numel(R1_vec)
             for jj = 1:numel(tau1_vec)
-                cost_surf(jj, ii) = RMSE_1RC(V_SD, [R0, R1_vec(ii), tau1_vec(jj)], t_vec, I_vec);
+                cost_surf(jj, ii) = RMSE_1RC(V_SD, [R0, R1_vec(ii), tau1_vec(jj)], t_vec, I_vec, OCV);
             end
         end
 
@@ -82,7 +84,7 @@ for fileIdx = 1:length(driving_files)
                  'DisplayName', sprintf('Cost Surface Opt: R1=%.4f, τ1=%.1f', optR1, optTau));
 
         % 3) MultiStart 최적화 실행
-        problem = createOptimProblem('fmincon', 'objective', @(p) RMSE_1RC(V_SD, [R0, p], t_vec, I_vec), ...
+        problem = createOptimProblem('fmincon', 'objective', @(p) RMSE_1RC(V_SD, [R0, p], t_vec, I_vec, OCV), ...
                    'x0', p0, 'lb', lb, 'ub', ub, 'options', opts);
         [bestP, bestFval, exitflag, ~, sols] = run(ms, problem, startPts);
 
@@ -101,8 +103,8 @@ for fileIdx = 1:length(driving_files)
 end
 
 %% 보조 함수들
-function cost = RMSE_1RC(data, para, t, I)
-    cost = sqrt(mean((data - RC_model_1(para, t, I)).^2));
+function cost = RMSE_1RC(data, para, t, I, OCV)
+    cost = sqrt(mean((data - RC_model_1(para, t, I, OCV)).^2));
 end
 
 function stop = plotIter(p, optimValues, state)

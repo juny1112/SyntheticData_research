@@ -16,26 +16,28 @@ for fileIdx = 1:length(driving_files)
 
     t_vec = data.Var1; % [sec]
     I_vec = data.Var2; % [Ah]
+    N = numel(t_vec);
+    OCV = zeros(N, 1);
     X = [0.001 0.001 10]; % [R0[ohm], R1[ohm], tau1[sec]]
 
     % 1RC 모델 전압 생성
-    V_est = RC_model_1(X, t_vec, I_vec); % 초기값 직접 입력
+    V_est = RC_model_1(X, t_vec, I_vec, OCV); % 초기값 직접 입력
     base_name = sprintf('load%d', fileIdx);
     save([base_name '_data.mat'], 't_vec', 'I_vec', 'V_est');
 
 
     % Markov Noise
     original = V_est;
-    epsilon_percent_span = 5; % ±[%]
+    epsilon_percent_span = 1;     % ±1 %
     initial_state = 51;
-    sigma = 0.005;
+    sigma         = 5;
     numseeds = 10; % seed 개수
     noisedata = struct;
 
     for seed = 1:numseeds
         rng(seed);
-        [noisy, ~, ~, ~, ~, ~] = MarkovNoise(original, epsilon_percent_span, initial_state, sigma);
-        noisedata.(sprintf('V_SD%d', seed)) = noisy;
+        [noisy,~,~,~,~,~] = MarkovNoise_idx(original, epsilon_percent_span, initial_state, sigma);
+        noisedata.(sprintf('V_SD%d',seed)) = noisy;
     end
 
     noise_filename = ['noise_' base_name '_seed10.mat'];
@@ -43,7 +45,7 @@ for fileIdx = 1:length(driving_files)
     
     % Fitting
     R0 = 0.001; % R0 고정
-    p0  = [0.0008 8];  % [R1; tau1]
+    p0  = [0.0008 12];  % [R1; tau1]
     lb = [0 0.1];
     ub = p0*10;
     R1_vec = 0.0001:0.0001:0.0030;
@@ -65,7 +67,7 @@ for fileIdx = 1:length(driving_files)
                 tau1 = tau1_vec(jj);
 
                 para_try = [R0, R1, tau1];
-                cost_try = RMSE_1RC(V_SD,para_try, t_vec, I_vec);
+                cost_try = RMSE_1RC(V_SD,para_try, t_vec, I_vec, OCV);
                 cost_surface(jj, ii) = cost_try;
 
             end
@@ -88,11 +90,10 @@ for fileIdx = 1:length(driving_files)
             'MaxFunEvals',1e6, ...
             'OutputFcn',@plotIter, ... % 경로 그리는 함수
             'TolFun',1e-14, ...
-            'TolX',1e-15, ...
-            'FinDiffType', 'central');
+            'TolX',1e-15);
 
         [para_hat,fval,exitflag,output] = fmincon( ...
-            @(p) RMSE_1RC(V_SD, [R0, p], t_vec, I_vec), ...
+            @(p) RMSE_1RC(V_SD, [R0, p], t_vec, I_vec, OCV), ...
             p0, [],[],[],[], lb, ub, [], options);
         para_hats(i, :) = [R0, para_hat, exitflag, output.iterations];
 
@@ -106,8 +107,8 @@ end
 
 
 % RMSE(cost) 함수
-function cost = RMSE_1RC(data,para,t,I)
-  model = RC_model_1(para, t, I);
+function cost = RMSE_1RC(data,para,t,I, OCV)
+  model = RC_model_1(para, t, I, OCV);
   cost  = sqrt(mean((data - model).^2));
 end
 
