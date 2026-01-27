@@ -199,21 +199,9 @@ disp(strjoin(cell_names, ', '));
 
 % (기본 스칼라) ----------------------------------------------------------
 % 아래 값들은 예시로 비워두거나(=NaN) 네가 채워도 됨
-QC2_user      = [56.14;55.93;52.55;50.52;52.13;48.53;56.34;55.15;39.89;55.63;55.57;56.86];
-QC40_user     = [57.49;57.57;54;52.22;53.45;51.28;57.91;56.51;42.14;57.27;57.18;58.4];
-Rcharg_user   = [2.17
-1.90
-3.50
-2.82
-2.88
-3.38
-2.10
-1.93
-6.41
-2.00
-2.01
-8.56
-2.09];
+QC2_user      = nan(nC,1);
+QC40_user     = nan(nC,1);
+Rcharg_user   = nan(nC,1);
 Rcharg_80_90_avg_user = nan(nC,1);
 R1s_user      = nan(nC,1);
 
@@ -227,18 +215,7 @@ R1s_user      = nan(nC,1);
 
 % 예: 20도만 쓸거면 아래 4개만 채우면 됨
 DCIR1s_T20_user    = nan(nC,1);
-DCIR10s_T20_user   = [1.60 
-1.41 
-2.33 
-1.88 
-2.06 
-1.93 
-1.35 
-1.53 
-3.55 
-0.82 
-1.52 
-1.47];
+DCIR10s_T20_user   = nan(nC,1);
 DCIRdelta_T20_user = nan(nC,1);
 Power_T20_user     = nan(nC,1);
 
@@ -256,32 +233,9 @@ R1s_user               = ensureLength(R1s_user,               nC);
 % 길이 보정(온도별) - TEMP_list에 따라 필요한 것만 보정
 % (여기서는 T20만 예시로 넣어둠. TEMP_list 확장 시 동일하게 추가)
 DCIR1s_T20_user     = ensureLength(DCIR1s_T20_user,     nC);
-DCIR10s_T20_user    = [1.60 
-1.41 
-2.33 
-1.88 
-2.06 
-1.93 
-1.35 
-1.53 
-3.55 
-0.82 
-1.52 
-1.47];
-DCIRdelta_T20_user  = ensureLength(DCIR1s_T20_user,     nC);
-Power_T20_user      = [2089.79 
-2372.03 
-1427.37 
-1735.16 
-1603.14 
-1677.27 
-2476.97 
-2191.48 
-914.67 
-4067.20 
-2196.09 
-2278.82];
-Power_T20_user = Power_T20_user / 1000; % W -> kW 단위 변경
+DCIR10s_T20_user    = ensureLength(DCIR10s_T20_user,    nC);
+DCIRdelta_T20_user  = ensureLength(DCIRdelta_T20_user,  nC);
+Power_T20_user      = ensureLength(Power_T20_user,      nC);
 
 %% ── 온도별 데이터 컨테이너 구성(이름 기반 접근용) -----------------------
 % TEMP_list를 확장할 경우 아래 struct 필드도 같이 확장하면 됨.
@@ -432,7 +386,7 @@ for tt = 1:numel(target_active)
     ylabel(sprintf('Predicted %s', tname_tex), 'FontSize', 11, 'FontWeight','bold', 'Interpreter','tex');
     title(sprintf('MLR: %s | Loads: %s (R^2=%.3f, RMSE=%.3f)', ...
         tname_tex, strjoin(load_use, ', '), R2, RMSE), ...
-        'FontSize', 10, 'FontWeight','bold', 'Interpreter','none');
+        'FontSize', 12, 'FontWeight','bold', 'Interpreter','none');
     axis equal; axis tight;
 
     outfig1 = fullfile(save_path, sprintf('MLR_%s_true_vs_pred.fig', tname));

@@ -7,15 +7,15 @@
 clc; clear; close all;
 
 % [경로 설정]
-base_folder = 'G:\공유 드라이브\BSL_Data4\HNE_agedcell_8_processed\SIM_parsed';
-sim_mat_dir = fullfile(base_folder, '셀정렬');     % _SIM.mat 저장된 경로
+base_folder = 'G:\공유 드라이브\BSL_Data4\HNE_RPT_@50,70_251214_9\Driving\SIM_parsed\20degC\이름정렬';
+sim_mat_dir = fullfile(base_folder);     % _SIM.mat 저장된 경로
 out_dir     = fullfile(base_folder, 'SIM_plots_50s');  % 출력 폴더
 
 if ~exist(out_dir, 'dir'), mkdir(out_dir); end
 
 % [파라미터 설정]
 T_WINDOW_SEC       = 50;   % 표시할 시간 구간 (초)
-MAX_SIMS_PER_FILE  = 5;   % 파일당 최대 몇 개의 SIM 스텝만 그릴지
+MAX_SIMS_PER_FILE  = 1;   % 파일당 최대 몇 개의 SIM 스텝만 그릴지
 
 % [대상 파일 탐색]
 mats = dir(fullfile(sim_mat_dir, '*_SIM.mat'));
