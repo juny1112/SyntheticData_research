@@ -12,7 +12,7 @@
 clc; clear; close all;
 
 %% ── 경로 & 파일 리스트 ───────────────────────────────────────────────
-folder_SIM = 'G:\공유 드라이브\BSL_Data4\HNE_RPT_@50,70_251214_9\Driving\SIM_parsed\20degC\이름정렬';
+folder_SIM = 'G:\공유 드라이브\BSL_Data4\HNE_fresh_integrated_7_Drivingprocessed\SIM_parsed';
 
 sim_files  = dir(fullfile(folder_SIM,"*_SIM.mat"));
 if isempty(sim_files)
@@ -27,7 +27,7 @@ save_path = fullfile(save_root, sprintf('2RC_fitting_%ds', fit_window_sec));
 if ~exist(save_path,'dir'); mkdir(save_path); end
 
 %% ── 사용자 설정: 존재 SOC 목록(여기만 바꾸면 됨) ─────────────────────
-SOC_list = [50 70];          % 예: SOC 70, 50만 존재
+SOC_list = [90 70 50 30];          % 예: SOC 70, 50만 존재
 nSOC     = numel(SOC_list);
 
 % (옵션) 블록 그룹핑 사용 여부

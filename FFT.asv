@@ -7,11 +7,15 @@ clear; clc; close all;
 
 % 0) 분석할 파일 목록 -----------------------------------------------------
 % Driving
- driving_files = {
-    'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\udds_unit_time_scaled_current.xlsx'
-    'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\us06_unit_time_scaled_current.xlsx'
-    'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_CITY1_time_scaled_current.xlsx'
-    'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_HW1_time_scaled_current.xlsx'
+driving_files = {
+"G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\BSL_CITY1_0725.xlsx"
+"G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\BSL_CITY2_0726.xlsx"
+"G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\BSL_HW1_0725.xlsx"
+"G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\BSL_HW2_0725.xlsx"
+"G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\hwfet_0725.xlsx"
+"G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\udds_0725.xlsx"
+"G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\us06_0725.xlsx"
+"G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\WLTP_0725.xlsx"
 };
 
 % Pulse
@@ -24,8 +28,8 @@ pulse.I = zeros(size(pulse.t));     % 전류 벡터
 pulse.I(pulse.t>=t_p0 & pulse.t<=t_p1) = 1;  % 10~20초 구간에 I=1[A] 펄스
 % driving_files = {pulse};
 
-% 같이 처리시 
-driving_files = [ driving_files; {pulse} ];
+% 같이 처리시
+% driving_files = [ driving_files; {pulse} ];
 
 all_peak_tbl = struct;            % 파일별 피크·τ 저장
 
@@ -36,14 +40,14 @@ for fileIdx = 1:numel(driving_files)
         % (B) struct 형태로 들어온 경우: Pulse 데이터
         t_vec = item.t(:);   % 세로 벡터로 보장
         I_vec = item.I(:);
-        file_label = sprintf('Pulse'); 
+        file_label = sprintf('Pulse');
     else
         % (A) 문자열(파일 경로)로 들어온 경우: 엑셀 파일 읽기
         filename = item;
         data     = readtable(filename);
         t_vec = data.Var1;
         I_vec = data.Var2;
-        file_label = filename;  
+        file_label = filename;
     end
 
     % NaN 제거
@@ -52,6 +56,20 @@ for fileIdx = 1:numel(driving_files)
     I_vec = I_vec(mask);
 
     %% (B) 샘플링 정보 ---------------------------------------------------
+    % (B-0) 0~600초 구간만 사용 ----------------------------------------
+    t_max = 600;  % [s]
+    t0 = t_vec(1);                     % 데이터 시작 시간이 0이 아닐 수도 있어서
+    mask600 = (t_vec >= t0) & (t_vec <= t0 + t_max);
+    t_vec = t_vec(mask600);
+    I_vec = I_vec(mask600);
+
+    % (옵션) 너무 짧으면 스킵
+    if numel(t_vec) < 10
+        warning('600초 구간 데이터가 너무 짧습니다: %s', file_label);
+        all_peak_tbl.(sprintf('file%d',fileIdx)) = table();
+        continue;
+    end
+
     dt = median(diff(t_vec));                  % 평균 샘플링 간격 [s]
     fs = 1/dt;                                 % 샘플링 주파수 [Hz]
 
@@ -67,8 +85,8 @@ for fileIdx = 1:numel(driving_files)
 
     %% (D) 피크 탐색(최대 5개) -----------------------------------------
     [pks, locs] = findpeaks(mag, f, ...
-                            'MinPeakProminence', 0.05*max(mag), ... % 피크의 두드러짐을 최대값의 0.05이상으로 제한
-                            'SortStr','descend'); % pks, locs 내림차순 정렬(진폭 순)
+        'MinPeakProminence', 0.05*max(mag), ... % 피크의 두드러짐을 최대값의 0.05이상으로 제한
+        'SortStr','descend'); % pks, locs 내림차순 정렬(진폭 순)
     peak_num = 10; % 반환하고싶은 피크 수
     nShow = min(peak_num, numel(pks)); % 찾은 피크 수와 5 중 더 작은 값 반환
 
