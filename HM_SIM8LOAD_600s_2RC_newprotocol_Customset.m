@@ -12,7 +12,7 @@
 clc; clear; close all;
 
 %% ── 경로 & 파일 리스트 ───────────────────────────────────────────────
-folder_SIM = 'G:\공유 드라이브\BSL_Data4\HNE_RPT_@50,70_251214_9\Driving\SIM_parsed\20degC\이름정렬';
+folder_SIM = 'G:\공유 드라이브\BSL_Data4\HNE_fresh_integrated_7_Drivingprocessed\SIM_parsed';
 
 sim_files  = dir(fullfile(folder_SIM,"*_SIM.mat"));
 if isempty(sim_files)
@@ -27,7 +27,7 @@ save_path = fullfile(save_root, sprintf('2RC_fitting_%ds', fit_window_sec));
 if ~exist(save_path,'dir'); mkdir(save_path); end
 
 %% ── 사용자 설정: 존재 SOC 목록(여기만 바꾸면 됨) ─────────────────────
-SOC_list = [50 70];          % 예: SOC 70, 50만 존재
+SOC_list = [90 70 50 30];          % 예: SOC 70, 50만 존재
 nSOC     = numel(SOC_list);
 
 % (옵션) 블록 그룹핑 사용 여부
@@ -54,16 +54,28 @@ end
 rowNames = cellstr(rowNames);
 
 %% ── fmincon + MultiStart 설정 ────────────────────────────────────────
-ms       = MultiStart("UseParallel",true,"Display","off");
-startPts = RandomStartPointSet('NumStartPoints',40);
-opt      = optimset('display','off','MaxIter',1e3,'MaxFunEvals',1e4, ...
-                    'TolFun',eps,'TolX',eps);
+ms = MultiStart("UseParallel", true, "Display", "off");
+
+nStart = 40;
+
+opt = optimset('display','off','MaxIter',1e3,'MaxFunEvals',1e4, ...
+               'TolFun',eps,'TolX',eps);
 
 % 2-RC 초기추정값 / 경계 / 선형제약 (τ1<τ2)
 para0 = [0.003 0.0005 0.0005 10 100];
-lb    = [0       0       0      0.01  0.01];
+lb    = [0       0       0      0.1  0.1];
 ub    = [0.05 0.005 0.03 100 2000];
-A_lin = [0 0 0 1 -1];  b_lin = 0;
+A_lin = [0 0 0 1 -1];
+b_lin = 0;
+
+% (NEW) tau는 log-uniform, R들은 linear-uniform + tau1<tau2 만족하는 start points
+X0 = makeStartPoints_LogTau(nStart, lb, ub);
+
+% (권장) 공정성/안정성: para0도 start points에 포함
+X0 = [para0; X0];  % 총 nStart+1개
+
+startPts = CustomStartPointSet(X0);
+
 
 %% ── 누적 컨테이너 ────────────────────────────────────────────────────
 all_para_hats = struct;   % 각 파일: [nSeg × 8] = [R0 R1 R2 tau1 tau2 | RMSE exitflag iter] (R*는 Ω)
@@ -503,6 +515,60 @@ function y = valOrNaN(T, rowName, colName)
         catch
             y = NaN;
         end
+    end
+end
+
+
+function X0 = makeStartPoints_LogTau(nStart, lb, ub)
+% X0 = [R0 R1 R2 tau1 tau2] start points
+% - R0/R1/R2 : linear-uniform in [lb, ub]
+% - tau1/tau2: log-uniform in [lb, ub]
+% - enforce tau1 < tau2 at sampling stage
+
+    X0 = nan(nStart, 5);
+
+    % bounds
+    lbR = lb(1:3);  ubR = ub(1:3);
+    lb1 = lb(4);    ub1 = ub(4);   % tau1
+    lb2 = lb(5);    ub2 = ub(5);   % tau2
+
+    % safety
+    assert(all(lbR>=0) && all(ubR>lbR), 'R bounds invalid');
+    assert(lb1>0 && ub1>lb1 && lb2>0 && ub2>lb2, 'tau bounds invalid');
+
+    log_lb1 = log10(lb1); log_ub1 = log10(ub1);
+    log_lb2 = log10(lb2); log_ub2 = log10(ub2);
+
+    k = 0;
+    maxTries = 10000;
+    tries = 0;
+
+    while k < nStart && tries < maxTries
+        tries = tries + 1;
+
+        % --- R: linear-uniform
+        R = lbR + (ubR - lbR).*rand(1,3);
+
+        % --- tau1: log-uniform
+        tau1 = 10^(log_lb1 + (log_ub1 - log_lb1)*rand);
+
+        % --- tau2: log-uniform but must be > tau1 (and >= lb2)
+        tau2_lb = max(tau1, lb2) * (1 + 1e-12);   % strict inequality margin
+        if tau2_lb >= ub2
+            continue; % resample
+        end
+
+        log_tau2_lb = log10(tau2_lb);
+        tau2 = 10^(log_tau2_lb + (log_ub2 - log_tau2_lb)*rand);
+
+        % accept
+        k = k + 1;
+        X0(k,:) = [R, tau1, tau2];
+    end
+
+    if k < nStart
+        warning('Start points only generated %d/%d (constraints too tight?)', k, nStart);
+        X0 = X0(1:k,:);
     end
 end
 

@@ -1,61 +1,45 @@
 %% ========================================================================
 %  CostSurface_2RC_fromCellData_MS_batch_optimset.m
 %
-%  실제 셀 데이터(SIM_table: time/current/voltage/OCV_vec)로
-%   1) (seg 선택) 600s crop
-%   2) τ1–τ2 cost-surface 생성
-%       - 각 (tau1,tau2) grid에서 R0,R1,R2만 fmincon으로 피팅 (tau는 고정)
-%   3) MultiStart(5변수: [R0 R1 R2 tau1 tau2]) 최적화
-%   4) 결과 저장 (mat + fig/png)
+%  (UPDATE)
+%   - close(fig) 주석처리(그림 유지)
+%   - 가독성 좋은 Summary Table 생성:
+%       base_seg | surf_R0 surf_R1 surf_R2 surf_tau1 surf_tau2 surf_RMSE |
+%                  MS_R0 MS_R1 MS_R2 MS_tau1 MS_tau2 MS_RMSE MS_exitflag
 %
-%  - fmincon 옵션: optimset 통일
-%  - winner iteration trajectory: 없음
-%  - (FIX) results_cell.segs 구조체 필드 mismatch 오류 해결:
-%          results_cell.segs 를 "필드 포함 빈 struct"로 초기화
+%  (IMPORTANT)
+%   - cost-surface에서 R0/R1/R2 최적값도 저장하려면,
+%     tau grid마다 fmincon의 argmin pBest를 같이 저장해야 함.
 % ========================================================================
 
 clear; clc; close all;
 
 %% ========================= 사용자 설정 =========================
 
-% --- SIM_parsed 폴더 ---
-folder_SIM = 'G:\공유 드라이브\BSL_Data4\HNE_fresh_integrated_7_Drivingprocessed\SIM_parsed';
+folder_SIM = 'G:\공유 드라이브\BSL_Data4\HNE_RPT_@50,70_251214_9\Driving\SIM_parsed\20degC\이름정렬';
 
-% --- 결과 저장 폴더 ---
 save_dir  = fullfile(folder_SIM, 'CostSurface_2RC_fromCellData');
 if ~exist(save_dir,'dir'), mkdir(save_dir); end
 
-% --- 600s 윈도우 ---
 fit_window_sec = 600;
 
-% --- (A) 어떤 셀(SIM 파일) 돌릴지 ---
-% mode="all"     : folder_SIM의 *_SIM.mat 전부
-% mode="index"   : index 리스트만 (예: [1 2 5 6 8])
-% mode="pattern" : 패턴 매칭 (예: "*Cell15*_SIM.mat", "*fresh*_SIM.mat")
-cell_select.mode    = "index";        % "all" | "index" | "pattern"
-cell_select.index   = [1];            % mode="index"일 때만 사용 [1 2 5 6 8] 등
-cell_select.pattern = "*_SIM.mat";    % mode="pattern"일 때 사용
+cell_select.mode    = "index";      % "all" | "index" | "pattern"
+cell_select.index   = 1:12;          % [1 2 5 6 8] 등
+cell_select.pattern = "*_SIM.mat";
 
-% --- (B) 각 셀에서 어떤 seg 돌릴지 ---
-% mode="all"   : 1:nSeg 전부
-% mode="index" : seg index 리스트 (1:4, [1 2 5 6 8], 등)
-seg_select.mode  = "index";    % "all" | "index"
-seg_select.index = 9:16;       % 예) 1:4 / [1 2 5 6 8]
+seg_select.mode  = "index";         % "all" | "index"
+seg_select.index = 10 ;
 
-% --- (C) OCV 처리 ---
-% SIM_table에 OCV_vec이 없을 경우:
-allow_missing_ocv = true;   % true면 OCV=0으로 대체, false면 error
+allow_missing_ocv = true;
 
-% --- (D) τ grid (너가 바꾼 값 반영) ---
-tau1_vec = 10.^(linspace(0, 1.7, 61));     % 1 ~ 50 s
-tau2_vec = 10.^(linspace(1, 3.0, 101));    % 10 ~ 1000 s
+% --- τ grid (너가 현재 쓰는 값) ---
+tau1_vec = 10.^(linspace(-2, 2, 51));     % 1 ~ 50 s
+tau2_vec = 10.^(linspace(-2, 3.3, 201));    % 10 ~ 1000 s
 [T1, T2] = meshgrid(tau1_vec, tau2_vec);
 
-% --- (E) cost-surface / MultiStart on/off ---
 run_cost_surface = true;
 run_multistart   = true;
 
-% --- (F) 병렬 풀 / MultiStart 설정 ---
 if isempty(gcp('nocreate'))
     parpool;
 end
@@ -63,24 +47,23 @@ end
 ms       = MultiStart("UseParallel", true, "Display", "off");
 startPts = RandomStartPointSet('NumStartPoints', 40);
 
-% --- (G) fmincon 옵션: optimset으로 통일 ---
 optSurf = optimset('display','off', ...
     'MaxIter',1e3,'MaxFunEvals',1e4, ...
     'TolFun',eps,'TolX',eps);
 
 optMS = optimset('display','off', ...
-    'MaxIter',1e3,'MaxFunEvals',2e4, ...
+    'MaxIter',1e3,'MaxFunEvals',1e4, ...
     'TolFun',eps,'TolX',eps);
 
-% --- (H) 파라미터 스케일(초기값/경계) ---
 R0_init = 0.003; R1_init = 0.0005; R2_init = 0.0005;
 
-% R 상한 (필요시 조절)
+tau1_init_MS = 10;
+tau2_init_MS = 100;
+
 R0_ub = 0.05;   % [ohm]
-R1_ub = 0.01;
+R1_ub = 0.005;
 R2_ub = 0.03;
 
-% MultiStart 전체(5변수) 경계
 lb_MS = [0, 0, 0, tau1_vec(1),  tau2_vec(1)];
 ub_MS = [R0_ub, R1_ub, R2_ub, tau1_vec(end), tau2_vec(end)];
 
@@ -129,7 +112,6 @@ for fi = file_list
         continue;
     end
 
-    % seg_list 결정
     switch seg_select.mode
         case "all"
             seg_list = 1:nSeg;
@@ -148,7 +130,7 @@ for fi = file_list
 
     fprintf("\n=== CELL: %s | nSeg=%d | run segs=%d ===\n", base_raw, nSeg, numel(seg_list));
 
-    % ===== (FIX) 구조체 필드 mismatch 방지: 필드 포함 빈 struct로 초기화 =====
+    % ---- results_cell 누적 ----
     results_cell = struct();
     results_cell.sim_path        = sim_path;
     results_cell.base_raw        = base_raw;
@@ -160,7 +142,17 @@ for fi = file_list
         't_len',        {}, ...
         'surface_best', {}, ...
         'ms_best',      {}, ...
-        'cost_surface', {} );
+        'cost_surface', {}, ...
+        'cost_surface_R0', {}, ...
+        'cost_surface_R1', {}, ...
+        'cost_surface_R2', {} );
+
+    % ---- (NEW) Summary Table 누적용 ----
+    Summary = table([],[],[],[],[],[],[],[],[],[],[],[],[],[], ...
+        'VariableNames', { ...
+        'base_seg', ...
+        'surf_R0','surf_R1','surf_R2','surf_tau1','surf_tau2','surf_RMSE', ...
+        'MS_R0','MS_R1','MS_R2','MS_tau1','MS_tau2','MS_RMSE','MS_exitflag'});
 
     for si = 1:numel(seg_list)
         s = seg_list(si);
@@ -177,14 +169,12 @@ for fi = file_list
                 O = SIM_table.OCV_vec{s};
             end
 
-            % 시간축 정규화
             if isduration(t)
                 t = seconds(t - t(1));
             else
                 t = t - t(1);
             end
 
-            % 600s crop
             [t2, I2, V2, O2, okCrop] = cropToWindow(t, I, V, O, fit_window_sec);
             if ~okCrop
                 warning("(%s) seg %d: crop 후 데이터 부족 → skip", base_raw, s);
@@ -203,59 +193,80 @@ for fi = file_list
                 O2 = O2(:);
             end
 
-            %% (2) Cost-surface
+            %% (2) Cost-surface (RMSE + R0/R1/R2 argmin 저장)
             cost_surface = [];
+            cost_R0 = []; cost_R1 = []; cost_R2 = [];
             tau1_best = NaN; tau2_best = NaN; rmse_surf_best = NaN;
+            surfR0_best = NaN; surfR1_best = NaN; surfR2_best = NaN;
 
             if run_cost_surface
-                cost_surface = zeros(numel(tau2_vec), numel(tau1_vec));
+                nT2 = numel(tau2_vec);
+                nT1 = numel(tau1_vec);
 
-                for ii = 1:numel(tau1_vec)
+                cost_surface = zeros(nT2, nT1);
+                cost_R0 = nan(nT2, nT1);
+                cost_R1 = nan(nT2, nT1);
+                cost_R2 = nan(nT2, nT1);
+
+                for ii = 1:nT1
                     tau1 = tau1_vec(ii);
 
-                    for jj = 1:numel(tau2_vec)
+                    for jj = 1:nT2
                         tau2 = tau2_vec(jj);
 
-                        % tau 고정: lb=ub로 묶기
                         p0 = [R0_init, R1_init, R2_init, tau1, tau2];
                         lb = [0,       0,       0,       tau1, tau2];
                         ub = [R0_ub,   R1_ub,   R2_ub,   tau1, tau2];
 
-                        [~, fval] = fmincon(@(p) RMSE_2RC(V2, p, t2, I2, O2), ...
-                                            p0, [],[],[],[], lb, ub, [], optSurf);
+                        [pBest, fval] = fmincon(@(p) RMSE_2RC(V2, p, t2, I2, O2), ...
+                                                p0, [],[],[],[], lb, ub, [], optSurf);
 
                         cost_surface(jj, ii) = fval;
+                        cost_R0(jj, ii) = pBest(1);
+                        cost_R1(jj, ii) = pBest(2);
+                        cost_R2(jj, ii) = pBest(3);
                     end
                 end
 
-                % surface 최적점
                 [rmse_surf_best, idxLin] = min(cost_surface(:));
                 [r,c] = ind2sub(size(cost_surface), idxLin);
+
                 tau1_best = tau1_vec(c);
                 tau2_best = tau2_vec(r);
+
+                surfR0_best = cost_R0(r,c);
+                surfR1_best = cost_R1(r,c);
+                surfR2_best = cost_R2(r,c);
             end
 
-            %% (3) MultiStart (5변수)
-            xBest = nan(1,5);
-            fBest = NaN;
+            %% (3) MultiStart (5변수)  [공정 평가: cost-surface 결과 미사용]
+            xBest    = nan(1,5);
+            fBest    = NaN;
             exitflag = NaN;
 
             if run_multistart
-                % 초기값: surface best 있으면 그걸 사용, 아니면 중앙값
-                if ~isnan(tau1_best) && ~isnan(tau2_best)
-                    x0 = [R0_init, R1_init, R2_init, tau1_best, tau2_best];
-                else
-                    x0 = [R0_init, R1_init, R2_init, tau1_vec(round(end/2)), tau2_vec(round(end/2))];
-                end
+
+                x0 = [R0_init, R1_init, R2_init, tau1_init_MS, tau2_init_MS];
+
+                % ---- MS bounds (R은 기존 ub, tau는 grid 범위) ----
+                lb_MS = [0, 0, 0, tau1_vec(1),  tau2_vec(1)];
+                ub_MS = [R0_ub, R1_ub, R2_ub, tau1_vec(end), tau2_vec(end)];
+
+                % (권장) 물리 제약: tau1 <= tau2
+                A_lin = [0 0 0 1 -1];
+                b_lin = 0;
 
                 problem = createOptimProblem('fmincon', ...
                     'objective', @(x) RMSE_2RC(V2, x, t2, I2, O2), ...
-                    'x0', x0, 'lb', lb_MS, 'ub', ub_MS, 'options', optMS);
+                    'x0', x0, ...
+                    'lb', lb_MS, 'ub', ub_MS, ...
+                    'Aineq', A_lin, 'bineq', b_lin, ...
+                    'options', optMS);
 
                 [xBest, fBest, exitflag] = run(ms, problem, startPts);
             end
 
-            %% (4) Plot (cost-surface가 있을 때만)
+            %% (4) Plot
             fig = [];
             if run_cost_surface && ~isempty(cost_surface)
                 fig = figure('Name', sprintf('%s | seg %d', base_raw, s), 'NumberTitle', 'off', ...
@@ -271,8 +282,10 @@ for fi = file_list
                 if run_multistart && all(isfinite(xBest))
                     hMS = plot3(xBest(4), xBest(5), fBest, 'go', 'MarkerSize', 10, 'LineWidth', 2);
                     legend([hStar, hMS], ...
-                        {sprintf('Surface best: \\tau1=%.3f \\tau2=%.3f (RMSE=%.2f mV)', tau1_best, tau2_best, rmse_surf_best*1e3), ...
-                         sprintf('MultiStart best: \\tau1=%.3f \\tau2=%.3f (RMSE=%.2f mV)', xBest(4), xBest(5), fBest*1e3)}, ...
+                        {sprintf('Surface best: (R0=%.4g R1=%.4g R2=%.4g) \\tau1=%.3f \\tau2=%.3f RMSE=%.2f mV', ...
+                                  surfR0_best, surfR1_best, surfR2_best, tau1_best, tau2_best, rmse_surf_best*1e3), ...
+                         sprintf('MultiStart best: (R0=%.4g R1=%.4g R2=%.4g) \\tau1=%.3f \\tau2=%.3f RMSE=%.2f mV', ...
+                                  xBest(1), xBest(2), xBest(3), xBest(4), xBest(5), fBest*1e3)}, ...
                         'Location','best', 'AutoUpdate','off');
                 else
                     legend(hStar, sprintf('Surface best: \\tau1=%.3f \\tau2=%.3f (RMSE=%.2f mV)', ...
@@ -284,36 +297,66 @@ for fi = file_list
             segRes = struct();
             segRes.seg_idx = s;
             segRes.t_len = numel(t2);
-            segRes.surface_best = struct('tau1',tau1_best,'tau2',tau2_best,'rmse',rmse_surf_best);
+
+            segRes.surface_best = struct( ...
+                'R0',surfR0_best,'R1',surfR1_best,'R2',surfR2_best, ...
+                'tau1',tau1_best,'tau2',tau2_best,'rmse',rmse_surf_best);
+
             segRes.ms_best      = struct('xBest',xBest,'rmse',fBest,'exitflag',exitflag);
 
-            % cost_surface 저장(무거우면 주석처리 가능)
-            segRes.cost_surface = cost_surface;
+            % 전체 surface 저장(무거우면 아래 4줄 주석처리 가능)
+            segRes.cost_surface   = cost_surface;
+            segRes.cost_surface_R0 = cost_R0;
+            segRes.cost_surface_R1 = cost_R1;
+            segRes.cost_surface_R2 = cost_R2;
 
-            % ===== (FIX) 이제 필드 동일하므로 오류 없이 append 됨 =====
-            results_cell.segs(end+1) = segRes;
+            results_cell.segs(end+1) = segRes; %#ok<SAGROW>
 
             out_mat = fullfile(save_dir, sprintf('CostSurface_%s_seg%03d_%ds.mat', base_raw, s, fit_window_sec));
             save(out_mat, 'segRes', '-v7.3');
 
+            % 그림 저장 (그림은 닫지 않음: close(fig) 없음)
             if isgraphics(fig,'figure')
                 out_fig = fullfile(save_dir, sprintf('CostSurface_%s_seg%03d_%ds.fig', base_raw, s, fit_window_sec));
                 out_png = fullfile(save_dir, sprintf('CostSurface_%s_seg%03d_%ds.png', base_raw, s, fit_window_sec));
                 savefig(fig, out_fig);
                 exportgraphics(fig, out_png, 'Resolution', 200);
-                close(fig);
+                drawnow;
+                % close(fig);  % ★ 주석(요청사항)
             end
 
-            fprintf("    saved: seg %d | surfRMSE=%.2f mV | msRMSE=%.2f mV\n", ...
-                s, rmse_surf_best*1e3, fBest*1e3);
+            % ---- (NEW) Summary Table row append ----
+            base_seg = sprintf('%s_seg%03d', base_raw, s);
+
+            newRow = { ...
+                string(base_seg), ...
+                surfR0_best, surfR1_best, surfR2_best, tau1_best, tau2_best, rmse_surf_best, ...
+                xBest(1), xBest(2), xBest(3), xBest(4), xBest(5), fBest, exitflag ...
+                };
+
+            Summary = [Summary; newRow]; %#ok<AGROW>
+
+            fprintf("    saved: %s | surfRMSE=%.2f mV | msRMSE=%.2f mV\n", ...
+                base_seg, rmse_surf_best*1e3, fBest*1e3);
 
         catch ME
             warning("(%s) seg %d 실패: %s", base_raw, s, ME.message);
         end
     end
 
+    % ---- 셀 단위 저장 ----
     out_cell = fullfile(save_dir, sprintf('CostSurface_%s_ALLSEGS_%ds.mat', base_raw, fit_window_sec));
-    save(out_cell, 'results_cell', '-v7.3');
+    save(out_cell, 'results_cell', 'Summary', '-v7.3');
+
+    % (추가) csv도 저장(가독성)
+    out_csv = fullfile(save_dir, sprintf('Summary_%s_%ds.csv', base_raw, fit_window_sec));
+    try
+        writetable(Summary, out_csv);
+    catch
+        warning("CSV 저장 실패: %s", out_csv);
+    end
+
+    disp(Summary);
     fprintf("=== CELL DONE: %s | saved %s\n", base_raw, out_cell);
 end
 

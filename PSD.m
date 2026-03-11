@@ -1,14 +1,16 @@
 %% ======================================================================
-%  드라이빙 부하(Current) 파일  →  PSD(Welch, Hann)  →  주요 주파수 & τ 요약
+%  Driving load(Current) → PSD (Welch, Hann) → 주요 주파수 & τ 요약 + 리포팅
 %  - 입력(엑셀): 1열=시간[s], 2열=전류[A]
 %  - τ = 1/(2πf) [s]
 %
-%  (NEW)
-%   1) PSD 플랏 xlim 조절 가능 (예: [0,0.2])
-%   2) 콘솔 요약을 "테이블"로도 생성 (summary_tbl)
-%   3) Tau_s만: (행=피크 10개) x (열=주행부하 8종) 테이블 생성 (Tau_wide_tbl)
-%   4) Figure(시간영역) title을 "<주행부하이름> Current" 로 표시
-% ======================================================================
+%  (INTEGRATED)
+%   1) 0~t_max 구간 crop 옵션 ([]면 전체)
+%   2) Welch window를 '초' 기준으로 고정 (비교 목적에 타당)
+%   3) PSD mean/std 출력 + figure title에 표시
+%   4) 콘솔 요약 + summary_tbl(long) + Tau_wide_tbl(wide)
+%   5) PSD 플랏: xlim 제한 가능 + x축 log 스케일 토글
+%   6) (NEW) psd_stat_tbl: Load | mean | std ( + fs, dt ) 테이블 생성
+%% ======================================================================
 clear; clc; close all;
 
 %% 0) 분석할 파일 목록 -----------------------------------------------------
@@ -21,29 +23,48 @@ driving_files = {
     "G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\BSL_CITY2_0726.xlsx"
     "G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\BSL_HW1_0725.xlsx"
     "G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\BSL_HW2_0725.xlsx"
-    };
+};
+
+% 저장경로
+save_dir = "G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\PSD";
+if ~exist(save_dir,'dir'); mkdir(save_dir); end
 
 %% 사용자 설정 ------------------------------------------------------------
-t_max    = 600;          % [s] 0~600초 구간만 분석
-peak_num = 10;           % 피크 10개
-xlim_psd = [0 0.2];      % PSD 플랏 x축 범위. 자동이면 [] 로.
-% xlim_psd = [];
+t_max    = 600;          % [s] (비교 목적이면 고정 추천)  []면 전체 사용
+peak_num = 0;            % 피크 개수 (0이면 피크/τ 테이블은 비어있음)
 
-% Welch PSD 설정
-welch_win_sec = 20;      % [s] 윈도 길이 (추천: 10~50s 정도)
+% PSD plot 옵션
+xlim_psd = [];           % 예: [1e-4 0.2]  / 자동이면 []
+xlog_psd = true;         % x축 로그 스케일 on/off
+ylog_psd = false;        % y축 로그 스케일(원하면 true)
+use_dB   = false;        % true면 10*log10(PSD)로 표시(dB/Hz)
+
+% Welch PSD 설정(비교용으로 '초' 기준 고정 추천)
+welch_win_sec = 600;      % [s]
 welch_ovlp    = 0.5;     % overlap 비율 (0~1)
+nfft_mode     = "byWin"; % "byWin"=2^nextpow2(nWin) (추천) / "byData"=2^nextpow2(min(N,2^16))
 
-% 표시 옵션
-use_dB = false;          % true면 10*log10(PSD)로 표시 (dB/Hz)
+% 피크 탐색 prominence
+prom_ratio = 0.02;       % 0.01~0.05 추천
+
+% DC 제외(권장)
+exclude_dc_for_stats = true;
+exclude_dc_for_peaks = true;
 
 %% 결과 저장용 ------------------------------------------------------------
-all_peak_tbl = struct;   % 파일별 피크 테이블 저장(PSD 기반)
+all_peak_tbl  = struct;   % 파일별 피크 테이블
+all_psd_stat  = struct;   % 파일별 PSD mean/std, fs/dt
 
-summary_tbl = table();   % long 형태: Load, PeakRank, Freq_Hz, Tau_s, PSD_A2Hz, PSD_dBHz(optional)
+summary_tbl = table();    % long 형태 (피크 있을 때만 채워짐)
 
 nLoad = numel(driving_files);
-Tau_mat = nan(peak_num, nLoad);     % Tau_s wide (10 x 8)
+Tau_mat = nan(peak_num, nLoad);
 load_labels = strings(nLoad,1);
+
+% (NEW) Load | mean | std 테이블
+psd_stat_tbl = table('Size',[nLoad 5], ...
+    'VariableTypes', {'string','double','double','double','double'}, ...
+    'VariableNames', {'Load','fs_Hz','dt_s','PSD_mean_A2Hz','PSD_std_A2Hz'});
 
 %% 메인 루프 --------------------------------------------------------------
 for fileIdx = 1:nLoad
@@ -51,27 +72,28 @@ for fileIdx = 1:nLoad
     %% (A) 데이터 읽기 ---------------------------------------------------
     filename = driving_files{fileIdx};
     data = readtable(filename, 'VariableNamingRule','preserve');
-    t_vec = data{:,1};   % 시간
-    I_vec = data{:,2};   % 전류
-    file_label = filename;
+    t_vec = data{:,1};
+    I_vec = data{:,2};
 
     [~, nm, ~] = fileparts(char(filename));
     load_label = string(nm);
     load_labels(fileIdx) = load_label;
 
     % NaN 제거
-    mask  = ~(isnan(t_vec) | isnan(I_vec));
+    mask = ~(isnan(t_vec) | isnan(I_vec));
     t_vec = t_vec(mask);
     I_vec = I_vec(mask);
 
-    %% (B) 0~t_max 구간만 사용 ------------------------------------------
-    t0 = t_vec(1);
-    mask600 = (t_vec >= t0) & (t_vec <= t0 + t_max);
-    t_vec = t_vec(mask600);
-    I_vec = I_vec(mask600);
+    %% (B) 구간 crop (0~t_max) -------------------------------------------
+    if ~isempty(t_max)
+        t0 = t_vec(1);
+        maskT = (t_vec >= t0) & (t_vec <= t0 + t_max);
+        t_vec = t_vec(maskT);
+        I_vec = I_vec(maskT);
+    end
 
     if numel(t_vec) < 10
-        warning('600초 구간 데이터가 너무 짧습니다: %s', file_label);
+        warning('데이터가 너무 짧습니다: %s', filename);
         all_peak_tbl.(sprintf('file%d',fileIdx)) = table();
         continue;
     end
@@ -80,24 +102,49 @@ for fileIdx = 1:nLoad
     dt = median(diff(t_vec));
     fs = 1/dt;
 
-    % (권장) 평균 제거(DC 제거)
+    % DC 제거
     I0 = I_vec - mean(I_vec);
 
     %% (D) Welch PSD -----------------------------------------------------
-    % 윈도 길이(샘플) 지정 (너무 길거나 짧으면 자동 보정)
-    nWin = max(16, round(welch_win_sec * fs));
-    nWin = min(nWin, numel(I0));  % 데이터 길이 초과 방지
+    N = numel(I0);
 
-    win = hann(nWin, 'periodic');
+    nWin = max(16, round(welch_win_sec * fs));
+    nWin = min(nWin, N);
+    win = hann(nWin,'periodic');
     noverlap = round(welch_ovlp * nWin);
 
-    % nfft는 기본(자동) 써도 되지만, 분해능 조절하고 싶으면 2^nextpow2(nWin) 등 사용
-    nfft = max(256, 2^nextpow2(nWin));
+    switch nfft_mode
+        case "byWin"
+            nfft = max(256, 2^nextpow2(nWin));
+        case "byData"
+            nfft = 2^nextpow2(min(N, 2^16));
+        otherwise
+            error('nfft_mode must be "byWin" or "byData"');
+    end
 
-    % Pxx: A^2/Hz, f: Hz
-    [Pxx, f] = pwelch(I0, win, noverlap, nfft, fs, 'onesided');
+    [Pxx, f] = pwelch(I0, win, noverlap, nfft, fs, 'onesided'); % A^2/Hz
 
-    % 표시용 y (선형 또는 dB)
+    % PSD mean/std (기본: f>0 bins 기준)
+    if exclude_dc_for_stats
+        P_stat = Pxx(f>0);
+    else
+        P_stat = Pxx;
+    end
+
+    psd_mean = mean(P_stat);
+    psd_std  = std(P_stat);
+
+    % (NEW) psd_stat_tbl 채우기
+    psd_stat_tbl.Load(fileIdx) = load_label;
+    psd_stat_tbl.fs_Hz(fileIdx) = fs;
+    psd_stat_tbl.dt_s(fileIdx) = dt;
+    psd_stat_tbl.PSD_mean_A2Hz(fileIdx) = psd_mean;
+    psd_stat_tbl.PSD_std_A2Hz(fileIdx)  = psd_std;
+
+    all_psd_stat.(sprintf('file%d',fileIdx)) = struct( ...
+        'fs',fs,'dt',dt,'psd_mean',psd_mean,'psd_std',psd_std);
+
+    % 표시용 y
     if use_dB
         yplot = 10*log10(Pxx + realmin);
         ylab  = 'PSD (dB/Hz)';
@@ -106,13 +153,50 @@ for fileIdx = 1:nLoad
         ylab  = 'PSD (A^2/Hz)';
     end
 
-    %% (E) 피크 탐색 (PSD 기준) ------------------------------------------
-    % PSD는 dynamic range가 크니 prominence를 살짝 완만하게(예: max의 1~5%)
-    if all(~isfinite(Pxx)) || max(Pxx)<=0
+    %% (E) 피크 탐색 -----------------------------------------------------
+    % peak_num=0이면 피크 탐색/리포팅을 스킵 (경고 방지)
+    if peak_num <= 0
+        peak_tbl = table();
+        all_peak_tbl.(sprintf('file%d',fileIdx)) = peak_tbl;
+
+        % (F) 시각화는 계속 수행 (PSD/mean/std만 보고 싶을 수 있으니)
+        fig_title = sprintf('[%d] %s', fileIdx, filename);
+        figure('Name', fig_title, 'Position', [100 100 920 540]);
+
+        subplot(2,1,1);
+        plot(t_vec, I_vec, 'LineWidth', 1.1); grid on;
+        xlabel('Time (s)'); ylabel('Current (A)');
+        title(sprintf('%s Current', load_label), 'Interpreter','none');
+
+        subplot(2,1,2);
+        mPlot = true(size(f));
+        if exclude_dc_for_stats || exclude_dc_for_peaks
+            mPlot = (f>0);
+        end
+        plot(f(mPlot), yplot(mPlot), 'LineWidth', 1.2); grid on;
+        xlabel('Frequency (Hz)'); ylabel(ylab);
+        if xlog_psd, set(gca,'XScale','log'); end
+        if ylog_psd, set(gca,'YScale','log'); end
+        if ~isempty(xlim_psd), xlim(xlim_psd); end
+        title(sprintf('PSD (Welch, Hann) | mean=%.3g, std=%.3g', psd_mean, psd_std));
+        legend('PSD (Welch)','Location','best');
+
+        continue;
+    end
+
+    if exclude_dc_for_peaks
+        f_pk = f(f>0);
+        P_pk = Pxx(f>0);
+    else
+        f_pk = f;
+        P_pk = Pxx;
+    end
+
+    if all(~isfinite(P_pk)) || max(P_pk)<=0
         pks = []; locs = [];
     else
-        [pks, locs] = findpeaks(Pxx, f, ...
-            'MinPeakProminence', 0.02*max(Pxx), ...  % 필요시 0.01~0.05 조절
+        [pks, locs] = findpeaks(P_pk, f_pk, ...
+            'MinPeakProminence', prom_ratio*max(P_pk), ...
             'SortStr','descend');
     end
 
@@ -120,14 +204,14 @@ for fileIdx = 1:nLoad
 
     if nShow == 0
         peak_tbl = table();
-        warning('피크를 찾지 못했습니다: %s', file_label);
+        warning('피크를 찾지 못했습니다: %s', filename);
         locs_col = []; pks_col = []; tau_col = []; psd_db_col = [];
     else
-        idx      = 1:nShow;
-        locs_col = locs(idx); locs_col = locs_col(:);     % Hz
-        pks_col  = pks(idx);  pks_col  = pks_col(:);      % A^2/Hz
-        tau_col  = 1./(2*pi*locs_col);                    % s
-        psd_db_col = 10*log10(pks_col + realmin);         % dB/Hz (참고용)
+        idx = 1:nShow;
+        locs_col = locs(idx); locs_col = locs_col(:);
+        pks_col  = pks(idx);  pks_col  = pks_col(:);
+        tau_col  = 1./(2*pi*locs_col);
+        psd_db_col = 10*log10(pks_col + realmin);
 
         peak_tbl = table(locs_col, tau_col, pks_col, psd_db_col, ...
             'VariableNames', {'Freq_Hz','Tau_s','PSD_A2Hz','PSD_dBHz'});
@@ -135,7 +219,7 @@ for fileIdx = 1:nLoad
 
     all_peak_tbl.(sprintf('file%d',fileIdx)) = peak_tbl;
 
-    % (NEW-1) 요약 테이블(long) 누적
+    % summary_tbl(long) 누적
     if ~isempty(peak_tbl)
         tmp = peak_tbl;
         tmp.Load = repmat(load_label, height(tmp), 1);
@@ -144,48 +228,62 @@ for fileIdx = 1:nLoad
         summary_tbl = [summary_tbl; tmp]; %#ok<AGROW>
     end
 
-    % (NEW-2) Tau wide 채우기
+    % Tau wide 채우기
     if nShow > 0
         Tau_mat(1:nShow, fileIdx) = tau_col;
     end
 
     %% (F) 시각화 --------------------------------------------------------
-    fig_title = sprintf('[%d] %s', fileIdx, file_label);
-    figure('Name', fig_title, 'Position', [100 100 900 520]);
+    fig_title = sprintf('[%d] %s', fileIdx, filename);
+    figure('Name', fig_title, 'Position', [100 100 920 540]);
 
     % 시간 영역
     subplot(2,1,1);
-    plot(t_vec, I_vec,'LineWidth',1.1); grid on;
+    plot(t_vec, I_vec, 'LineWidth', 1.1); grid on;
     xlabel('Time (s)'); ylabel('Current (A)');
     title(sprintf('%s Current', load_label), 'Interpreter','none');
 
-    % 주파수 영역(PSD)
+    % PSD
     subplot(2,1,2);
-    plot(f, yplot,'LineWidth',1.2); hold on;
+    mPlot = true(size(f));
+    if exclude_dc_for_stats || exclude_dc_for_peaks
+        mPlot = (f>0);
+    end
+
+    plot(f(mPlot), yplot(mPlot), 'LineWidth', 1.2); hold on; grid on;
+    xlabel('Frequency (Hz)'); ylabel(ylab);
+
+    if xlog_psd, set(gca,'XScale','log'); end
+    if ylog_psd, set(gca,'YScale','log'); end
+    if ~isempty(xlim_psd), xlim(xlim_psd); end
 
     if nShow > 0
         if use_dB
-            stem(locs_col, 10*log10(pks_col + realmin), 'r','filled','LineWidth',1.2);
+            stem(locs_col, 10*log10(pks_col + realmin), 'r','filled','LineWidth',1.1);
         else
-            stem(locs_col, pks_col, 'r','filled','LineWidth',1.2);
+            stem(locs_col, pks_col, 'r','filled','LineWidth',1.1);
         end
         legend('PSD (Welch)','Detected Peaks','Location','best');
     else
         legend('PSD (Welch)','Location','best');
     end
 
-    grid on; xlabel('Frequency (Hz)'); ylabel(ylab);
-    title('PSD (Welch, Hann window)');
+    title(sprintf('PSD (Welch, Hann) | mean=%.3g, std=%.3g', psd_mean, psd_std));
 
-    if ~isempty(xlim_psd)
-        xlim(xlim_psd);
-    end
 end
 
 %% (G) 콘솔 요약 ---------------------------------------------------------
 fprintf('\n=============== 고유 주파수 & τ 요약 (PSD 기반) ===============\n');
+
 for fileIdx = 1:nLoad
     fprintf('\n--- %s ---\n', driving_files{fileIdx});
+
+    if isfield(all_psd_stat, sprintf('file%d',fileIdx))
+        st = all_psd_stat.(sprintf('file%d',fileIdx));
+        fprintf('fs = %.6g Hz | dt = %.6g s\n', st.fs, st.dt);
+        fprintf('PSD mean = %.6g (A^2/Hz) | PSD std = %.6g (A^2/Hz)\n', st.psd_mean, st.psd_std);
+    end
+
     disp(all_peak_tbl.(sprintf('file%d', fileIdx)));
 end
 
@@ -203,9 +301,25 @@ Tau_wide_tbl = movevars(Tau_wide_tbl, 'PeakRank', 'Before', 1);
 
 %% 확인용 출력 ------------------------------------------------------------
 disp(" ");
-disp("==== summary_tbl (PSD long) 미리보기 ====");
-disp(head(summary_tbl, 20));
+disp("==== psd_stat_tbl (Load | mean | std) ====");
+disp(psd_stat_tbl);
 
 disp(" ");
-disp("==== Tau_wide_tbl (10 x Loads) ====");
+disp("==== summary_tbl (PSD long) 미리보기 ====");
+if isempty(summary_tbl)
+    disp("(empty: peak_num=0 이거나 피크가 없어서 long 테이블이 생성되지 않았습니다.)");
+else
+    disp(head(summary_tbl, 20));
+end
+
+disp(" ");
+disp("==== Tau_wide_tbl (PeakRank x Loads) ====");
 disp(Tau_wide_tbl);
+
+% 파일 저장
+% writetable(psd_stat_tbl, fullfile(save_dir, "psd_stat_tbl.csv"));
+
+% (옵션) workspace 재사용용 MAT 저장
+save(fullfile(save_dir, "psd_stat_tbl.mat"), "psd_stat_tbl");
+
+fprintf("[done] saved psd_stat_tbl to: %s\n", save_dir);

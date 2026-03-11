@@ -28,7 +28,7 @@ SOC_use = [70];   % 예: [70], [70 50] 등
 
 % ★★★ 여기만 바꾸면 됨: 사용할 주행부하 입력(공백/콤마/세미콜론 지원)
 % 'US06','UDDS','HWFET','WLTP','CITY1','CITY2','HW1','HW2'
-LOAD_USE_STR = "US06 CITY1";   % 예: "US06 CITY1", "US06,CITY1", "US06;CITY1;HW1"
+LOAD_USE_STR = "US06 UDDS";   % 예: "US06 CITY1", "US06,CITY1", "US06;CITY1;HW1"
 
 % (label 확장 대비) 온도 리스트 (예: [45 35 20 10 0])
 TEMP_list = [20];
