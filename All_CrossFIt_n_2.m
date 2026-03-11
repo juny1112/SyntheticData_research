@@ -87,10 +87,14 @@ pulse.I(pulse.t>=pulse_start & pulse.t<=pulse_end) = 1;
 
 % Driving data
 driving_paths = {
-     'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\udds_unit_time_scaled_current.xlsx',
-     'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\us06_unit_time_scaled_current.xlsx',
-     'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_CITY1_time_scaled_current.xlsx',
-     'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_HW1_time_scaled_current.xlsx'
+"G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\us06_0725.xlsx"
+"G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\WLTP_0725.xlsx"
+"G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\BSL_CITY1_0725.xlsx"
+"G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\BSL_CITY2_0726.xlsx"
+"G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\BSL_HW1_0725.xlsx"
+"G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\BSL_HW2_0725.xlsx"
+"G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\hwfet_0725.xlsx"
+"G:\공유 드라이브\Battery Software Lab\Protocols\2025 현대 NE 고품셀 평가 실험\주행부하_scaledown\udds_0725.xlsx"
  };
 
 % Pulse 켜기
@@ -124,6 +128,7 @@ opt = optimset('display','off','MaxIter',1e3,'MaxFunEvals',1e4, ...
 % ------------------------------------------------------------------
 all_para_hats = struct;
 all_rmse      = struct;
+all_summary   = struct;
 
 for fileIdx = 1:length(driving_files)
     %% 1) 파일 읽기
@@ -137,7 +142,7 @@ for fileIdx = 1:length(driving_files)
         t_vec    = tbl{:,1};
         I_vec    = tbl{:,2};
         [~,name,~] = fileparts(item);
-        base_name = name;
+        base_name = char(name);
     end
 
     %% 2) 참 전압 V_est (n-RC 모델 사용)
