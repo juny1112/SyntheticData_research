@@ -40,8 +40,8 @@ use_cell_mean = false;         % ECM에서 load별 셀 평균 쓸지
 rowi = 1;                      % use_cell_mean=false일 때 사용할 row index
 
 % ===== 분석 옵션 =====
-use_log   = false;             % false=linear, true=log-log
-corr_type = "Pearson";         % "Pearson" or "Spearman"
+use_log   = true;             % false=linear, true=log-log
+corr_type = "Spearman";         % "Pearson" or "Spearman"
 
 % PSD feature에서 제외하고 싶은 컬럼(필요시 추가)
 excludePSD = ["Load","LoadKey","fs_Hz","dt_s"];  % 보통 키/샘플링정보는 feature에서 제외

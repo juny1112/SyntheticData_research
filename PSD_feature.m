@@ -1,35 +1,35 @@
 %% ======================================================================
 %  PSD_feature.m
-%  Driving load(Current) → PSD (Welch, Hann) + tau-band energy features
+%  Driving load(Current) -> PSD (Welch, Hann) + tau-band energy features
 %
 %  - 입력(엑셀): 1열=시간[s], 2열=전류[A]
-%  - PSD: pwelch(I0, hann, overlap, nfft, fs, 'onesided')  → Pxx [A^2/Hz]
+%  - PSD: pwelch(I0, hann, overlap, nfft, fs, 'onesided')  -> Pxx [A^2/Hz]
 %
 %  (FEATURES)
 %    PSD_mean_A2Hz        = mean(Pxx)  (DC 제외 여부 설정)
 %    PSD_std_A2Hz         = std(Pxx)
-%    PSD_int_A2           = ∫ Pxx df   (A^2)  ~ 전류변동 분산 스케일(DC 제외 시)
+%    PSD_int_A2           = ∫ Pxx df   (A^2)
 %    E_fast_A2            = ∫_{f_fast} Pxx df
 %    E_slow_A2            = ∫_{f_slow} Pxx df
 %    E_slow_fast_ratio    = E_slow / E_fast
 %
-%  (PSD-weighted mean/std in frequency domain)
+%  (PSD-weighted mean/std in linear frequency domain)
 %    f_mean_Hz            = sum(f*P) / sum(P)
 %    f_std_Hz             = sqrt( sum((f-f_mean)^2 * P) / sum(P) )
 %    tau_mean_s           = 1/(2*pi*f_mean_Hz)
+%
+%  (NEW) log10-frequency representative frequency/tau/std
+%    f_geo_mean_Hz        = 10^( sum(log10(f)*P) / sum(P) )
+%    tau_geo_mean_s       = 1/(2*pi*f_geo_mean_Hz)
+%    f_geo_std_dec        = sqrt( sum((log10(f)-mu)^2 * P) / sum(P) )
 %
 %  (NEW) band-wise PSD-weighted mean frequencies
 %    fast_mean_Hz, slow_mean_Hz
 %    tau_fast_mean_s, tau_slow_mean_s
 %
-%  Plot:
-%    - FAST band shading: green
-%    - SLOW band shading: yellow
-%    - f_mean_Hz line: red dashed
-%    - fast_mean_Hz line: blue dashed
-%    - slow_mean_Hz line: orange dashed
-%    - (REQUEST) band edge lines removed
-%    - (REQUEST) info textbox removed
+%  (NEW) band-wise log10-frequency representative frequency/tau
+%    f_fast_geo_mean_Hz,  f_slow_geo_mean_Hz
+%    tau_fast_geo_mean_s, tau_slow_geo_mean_s
 %
 %  저장:
 %    - psd_stat_tbl.csv
@@ -67,7 +67,7 @@ welch_ovlp    = 0.5;     % overlap 비율 (0~1)
 
 % ===== (옵션) nfft 강제 =====
 force_nfft = true;
-nfft_fixed = 4096;       % 4096 추천 (저주파 bin 촘촘). 더 촘촘=8192/16384.
+nfft_fixed = 4096;       % 4096 추천
 
 % DataTip(클릭) 옵션: false면 켬
 turn_off_datacursor = false;
@@ -87,16 +87,23 @@ fprintf("slow tau=[%.2g %.2g] s -> f=[%.6g %.6g] Hz\n\n", tau_slow_range(1), tau
 %% 결과 테이블 ------------------------------------------------------------
 nLoad = numel(driving_files);
 
-% (REQUEST) tau_low_s / tau_high_s 제거
-psd_stat_tbl = table('Size',[nLoad 16], ...
-    'VariableTypes', {'string','double','double', ...
-                      'double','double','double','double','double','double', ...
-                      'double','double','double', ...
-                      'double','double','double','double'}, ...
-    'VariableNames', {'Load','fs_Hz','dt_s', ...
-                      'PSD_mean_A2Hz','PSD_std_A2Hz','PSD_int_A2','E_fast_A2','E_slow_A2','E_slow_fast_ratio', ...
-                      'f_mean_Hz','f_std_Hz','tau_mean_s', ...
-                      'fast_mean_Hz','slow_mean_Hz','tau_fast_mean_s','tau_slow_mean_s'});
+psd_stat_tbl = table('Size',[nLoad 23], ...
+    'VariableTypes', { ...
+    'string','double','double', ...
+    'double','double','double','double','double','double', ...
+    'double','double','double', ...
+    'double','double','double','double', ...
+    'double','double','double', ...
+    'double','double', ...
+    'double','double'}, ...
+    'VariableNames', { ...
+    'Load','fs_Hz','dt_s', ...
+    'PSD_mean_A2Hz','PSD_std_A2Hz','PSD_int_A2','E_fast_A2','E_slow_A2','E_slow_fast_ratio', ...
+    'f_mean_Hz','f_std_Hz','tau_mean_s', ...
+    'fast_mean_Hz','slow_mean_Hz','tau_fast_mean_s','tau_slow_mean_s', ...
+    'f_geo_mean_Hz','tau_geo_mean_s','f_geo_std_dec', ...
+    'f_fast_geo_mean_Hz','tau_fast_geo_mean_s', ...
+    'f_slow_geo_mean_Hz','tau_slow_geo_mean_s'});
 
 all_psd_stat = struct;
 
@@ -111,16 +118,11 @@ for fileIdx = 1:nLoad
 
     [~, nm, ~] = fileparts(char(filename));
 
-    % ==================================================================
-    % (NEW) load_label 표준화: 반드시 {"US06","UDDS","HWFET","WLTP","CITY1","CITY2","HW1","HW2"} 중 하나로 저장
-    % ==================================================================
-    load_label = standardizeLoadName(nm);  % <- 아래 helper function 사용
-    % ==================================================================
+    load_label = standardizeLoadName(nm);
 
-    % (NEW) Load 문자열 클린업: 따옴표/공백 제거 (CSV/엑셀에서 "US06" 형태로 들어오는 케이스 방지)
-    load_label = erase(load_label, '"');    % 큰따옴표 제거
-    load_label = erase(load_label, '''');   % 작은따옴표 제거(혹시)
-    load_label = strtrim(load_label);       % 앞뒤 공백 제거
+    load_label = erase(load_label, '"');
+    load_label = erase(load_label, '''');
+    load_label = strtrim(load_label);
 
     mask = ~(isnan(t_vec) | isnan(I_vec));
     t_vec = t_vec(mask);
@@ -211,6 +213,26 @@ for fileIdx = 1:nLoad
         tau_mean = NaN;
     end
 
+    %% (G-1) log10-frequency representative frequency/tau/std (전체 대역)
+    f_geo_mean = NaN; tau_geo_mean = NaN; f_geo_std_dec = NaN;
+
+    m_log = (f_stat > 0) & isfinite(f_stat) & isfinite(P_stat) & (P_stat >= 0);
+    f_log = f_stat(m_log);
+    P_log = P_stat(m_log);
+
+    wLog = sum(P_log);
+    if numel(f_log) >= 2 && wLog > 0 && isfinite(wLog)
+        u_log = log10(f_log);
+        mu_log10f = sum(u_log .* P_log) / wLog;
+        var_log10f = sum(((u_log - mu_log10f).^2) .* P_log) / wLog;
+        f_geo_std_dec = sqrt(max(var_log10f, 0));
+
+        f_geo_mean = 10^(mu_log10f);
+        if isfinite(f_geo_mean) && f_geo_mean > 0
+            tau_geo_mean = 1/(2*pi*f_geo_mean);
+        end
+    end
+
     %% (G-2) band별 PSD-weighted mean frequency (fast/slow)
     fast_mean = NaN; slow_mean = NaN;
     tau_fast_mean = NaN; tau_slow_mean = NaN;
@@ -235,25 +257,75 @@ for fileIdx = 1:nLoad
         end
     end
 
+    %% (G-3) band별 log10-frequency representative frequency/tau (fast/slow)
+    f_fast_geo_mean = NaN; f_slow_geo_mean = NaN;
+    tau_fast_geo_mean = NaN; tau_slow_geo_mean = NaN;
+
+    if nnz(m_fast) >= 2
+        f_fast_use = f_stat(m_fast);
+        P_fast_use = P_stat(m_fast);
+
+        m_ok = (f_fast_use > 0) & isfinite(f_fast_use) & isfinite(P_fast_use) & (P_fast_use >= 0);
+        f_fast_use = f_fast_use(m_ok);
+        P_fast_use = P_fast_use(m_ok);
+
+        wFastLog = sum(P_fast_use);
+        if numel(f_fast_use) >= 2 && wFastLog > 0 && isfinite(wFastLog)
+            mu_fast_log10f = sum(log10(f_fast_use) .* P_fast_use) / wFastLog;
+            f_fast_geo_mean = 10^(mu_fast_log10f);
+            if isfinite(f_fast_geo_mean) && f_fast_geo_mean > 0
+                tau_fast_geo_mean = 1/(2*pi*f_fast_geo_mean);
+            end
+        end
+    end
+
+    if nnz(m_slow) >= 2
+        f_slow_use = f_stat(m_slow);
+        P_slow_use = P_stat(m_slow);
+
+        m_ok = (f_slow_use > 0) & isfinite(f_slow_use) & isfinite(P_slow_use) & (P_slow_use >= 0);
+        f_slow_use = f_slow_use(m_ok);
+        P_slow_use = P_slow_use(m_ok);
+
+        wSlowLog = sum(P_slow_use);
+        if numel(f_slow_use) >= 2 && wSlowLog > 0 && isfinite(wSlowLog)
+            mu_slow_log10f = sum(log10(f_slow_use) .* P_slow_use) / wSlowLog;
+            f_slow_geo_mean = 10^(mu_slow_log10f);
+            if isfinite(f_slow_geo_mean) && f_slow_geo_mean > 0
+                tau_slow_geo_mean = 1/(2*pi*f_slow_geo_mean);
+            end
+        end
+    end
+
     %% (H) 테이블 채우기
-    psd_stat_tbl.Load(fileIdx)              = load_label;
-    psd_stat_tbl.fs_Hz(fileIdx)             = fs;
-    psd_stat_tbl.dt_s(fileIdx)              = dt;
-    psd_stat_tbl.PSD_mean_A2Hz(fileIdx)     = psd_mean;
-    psd_stat_tbl.PSD_std_A2Hz(fileIdx)      = psd_std;
-    psd_stat_tbl.PSD_int_A2(fileIdx)        = PSD_int;
-    psd_stat_tbl.E_fast_A2(fileIdx)         = E_fast;
-    psd_stat_tbl.E_slow_A2(fileIdx)         = E_slow;
-    psd_stat_tbl.E_slow_fast_ratio(fileIdx) = ratio_slow_fast;
+    psd_stat_tbl.Load(fileIdx)                    = load_label;
+    psd_stat_tbl.fs_Hz(fileIdx)                   = fs;
+    psd_stat_tbl.dt_s(fileIdx)                    = dt;
+    psd_stat_tbl.PSD_mean_A2Hz(fileIdx)           = psd_mean;
+    psd_stat_tbl.PSD_std_A2Hz(fileIdx)            = psd_std;
+    psd_stat_tbl.PSD_int_A2(fileIdx)              = PSD_int;
+    psd_stat_tbl.E_fast_A2(fileIdx)               = E_fast;
+    psd_stat_tbl.E_slow_A2(fileIdx)               = E_slow;
+    psd_stat_tbl.E_slow_fast_ratio(fileIdx)       = ratio_slow_fast;
 
-    psd_stat_tbl.f_mean_Hz(fileIdx)         = f_mean;
-    psd_stat_tbl.f_std_Hz(fileIdx)          = f_std;
-    psd_stat_tbl.tau_mean_s(fileIdx)        = tau_mean;
+    psd_stat_tbl.f_mean_Hz(fileIdx)               = f_mean;
+    psd_stat_tbl.f_std_Hz(fileIdx)                = f_std;
+    psd_stat_tbl.tau_mean_s(fileIdx)              = tau_mean;
 
-    psd_stat_tbl.fast_mean_Hz(fileIdx)      = fast_mean;
-    psd_stat_tbl.slow_mean_Hz(fileIdx)      = slow_mean;
-    psd_stat_tbl.tau_fast_mean_s(fileIdx)   = tau_fast_mean;
-    psd_stat_tbl.tau_slow_mean_s(fileIdx)   = tau_slow_mean;
+    psd_stat_tbl.fast_mean_Hz(fileIdx)            = fast_mean;
+    psd_stat_tbl.slow_mean_Hz(fileIdx)            = slow_mean;
+    psd_stat_tbl.tau_fast_mean_s(fileIdx)         = tau_fast_mean;
+    psd_stat_tbl.tau_slow_mean_s(fileIdx)         = tau_slow_mean;
+
+    psd_stat_tbl.f_geo_mean_Hz(fileIdx)           = f_geo_mean;
+    psd_stat_tbl.tau_geo_mean_s(fileIdx)          = tau_geo_mean;
+    psd_stat_tbl.f_geo_std_dec(fileIdx)           = f_geo_std_dec;
+
+    psd_stat_tbl.f_fast_geo_mean_Hz(fileIdx)      = f_fast_geo_mean;
+    psd_stat_tbl.tau_fast_geo_mean_s(fileIdx)     = tau_fast_geo_mean;
+
+    psd_stat_tbl.f_slow_geo_mean_Hz(fileIdx)      = f_slow_geo_mean;
+    psd_stat_tbl.tau_slow_geo_mean_s(fileIdx)     = tau_slow_geo_mean;
 
     all_psd_stat.(sprintf('file%d',fileIdx)) = struct( ...
         'Load',load_label,'fs',fs,'dt',dt,'nfft',nfft,'nWin',nWin, ...
@@ -262,11 +334,14 @@ for fileIdx = 1:nLoad
         'f_mean',f_mean,'f_std',f_std,'tau_mean',tau_mean, ...
         'fast_mean',fast_mean,'slow_mean',slow_mean, ...
         'tau_fast_mean',tau_fast_mean,'tau_slow_mean',tau_slow_mean, ...
+        'f_geo_mean',f_geo_mean,'tau_geo_mean',tau_geo_mean,'f_geo_std_dec',f_geo_std_dec, ...
+        'f_fast_geo_mean',f_fast_geo_mean,'tau_fast_geo_mean',tau_fast_geo_mean, ...
+        'f_slow_geo_mean',f_slow_geo_mean,'tau_slow_geo_mean',tau_slow_geo_mean, ...
         'tau_fast_range',tau_fast_range,'tau_slow_range',tau_slow_range,'f_fast',f_fast,'f_slow',f_slow);
 
-    %% 콘솔 출력 (요청: Hz + tau 둘 다)
+    %% 콘솔 출력
     df = fs/nfft;
-    fmin_pos = df; % 첫 양의 bin
+    fmin_pos = df;
     tau_max_effective = 1/(2*pi*fmin_pos);
 
     fprintf('--- %s ---\n', load_label);
@@ -274,9 +349,13 @@ for fileIdx = 1:nLoad
         fs, dt, nWin, nfft, df, fmin_pos, tau_max_effective);
     fprintf('PSD(mean)=%.6g A^2/Hz, PSD(std)=%.6g A^2/Hz, PSD(int)=%.6g A^2\n', psd_mean, psd_std, PSD_int);
     fprintf('E_fast=%.6g A^2, E_slow=%.6g A^2, ratio(Eslow/Efast)=%.6g\n', E_fast, E_slow, ratio_slow_fast);
-    fprintf('Total weighted mean f=%.6g Hz (tau=%.3g s), std f=%.6g Hz\n', f_mean, tau_mean, f_std);
-    fprintf('FAST mean f=%.6g Hz (tau=%.3g s), SLOW mean f=%.6g Hz (tau=%.3g s)\n\n', ...
+    fprintf('Total linear mean f=%.6g Hz (tau=%.3g s), std f=%.6g Hz\n', f_mean, tau_mean, f_std);
+    fprintf('Total log-space rep. f=%.6g Hz (tau=%.3g s), std=%.6g dec\n', ...
+        f_geo_mean, tau_geo_mean, f_geo_std_dec);
+    fprintf('FAST linear mean f=%.6g Hz (tau=%.3g s), SLOW linear mean f=%.6g Hz (tau=%.3g s)\n', ...
         fast_mean, tau_fast_mean, slow_mean, tau_slow_mean);
+    fprintf('FAST log-space rep. f=%.6g Hz (tau=%.3g s)\n', f_fast_geo_mean, tau_fast_geo_mean);
+    fprintf('SLOW log-space rep. f=%.6g Hz (tau=%.3g s)\n\n', f_slow_geo_mean, tau_slow_geo_mean);
 
     %% (I) Plot 준비
     if use_dB
@@ -299,7 +378,7 @@ for fileIdx = 1:nLoad
     if turn_off_datacursor
         datacursormode(fig, 'off');
     else
-        datacursormode(fig, 'on'); % 클릭하면 DataTip 뜨게
+        datacursormode(fig, 'on');
     end
 
     % time domain
@@ -321,7 +400,6 @@ for fileIdx = 1:nLoad
     xL = xlim(ax);
 
     % --- band shading (FAST=green, SLOW=yellow) ---
-    % clip to axes limits (band 자체는 유지)
     f_fast_clip = [max(f_fast(1), xL(1)), min(f_fast(2), xL(2))];
     f_slow_clip = [max(f_slow(1), xL(1)), min(f_slow(2), xL(2))];
 
@@ -332,42 +410,66 @@ for fileIdx = 1:nLoad
         hFastPatch = patch(ax, ...
             [f_fast_clip(1) f_fast_clip(2) f_fast_clip(2) f_fast_clip(1)], ...
             [yl(1) yl(1) yl(2) yl(2)], ...
-            [0 1 0], 'FaceAlpha', 0.10, 'EdgeColor', 'none'); % green
+            [0 1 0], 'FaceAlpha', 0.10, 'EdgeColor', 'none');
     end
 
     if f_slow_clip(2) > f_slow_clip(1)
         hSlowPatch = patch(ax, ...
             [f_slow_clip(1) f_slow_clip(2) f_slow_clip(2) f_slow_clip(1)], ...
             [yl(1) yl(1) yl(2) yl(2)], ...
-            [1 1 0], 'FaceAlpha', 0.10, 'EdgeColor', 'none'); % yellow
+            [1 1 0], 'FaceAlpha', 0.10, 'EdgeColor', 'none');
     end
-
-    % (REQUEST) band edge lines 제거: 그리는 코드 없음
 
     % --- mean lines ---
-    hMeanLine = gobjects(1);
-    if isfinite(f_mean) && f_mean > 0
-        hMeanLine = plot(ax, [f_mean f_mean], yl, 'r--', 'LineWidth', 1.4);
+    %%% ===================== (HIDDEN) linear mean lines =====================
+    % hMeanLine = gobjects(1);
+    % if isfinite(f_mean) && f_mean > 0
+    %     hMeanLine = plot(ax, [f_mean f_mean], yl, 'r--', 'LineWidth', 1.4);
+    % end
+    %
+    % hFastMeanLine = gobjects(1);
+    % if isfinite(fast_mean) && fast_mean > 0
+    %     hFastMeanLine = plot(ax, [fast_mean fast_mean], yl, '--', 'LineWidth', 1.4);
+    %     hFastMeanLine.Color = [0 0.4470 0.7410];
+    % end
+    %
+    % hSlowMeanLine = gobjects(1);
+    % if isfinite(slow_mean) && slow_mean > 0
+    %     hSlowMeanLine = plot(ax, [slow_mean slow_mean], yl, '--', 'LineWidth', 1.4);
+    %     hSlowMeanLine.Color = [0.8500 0.3250 0.0980];
+    % end
+    %%% =====================================================================
+
+    % --- log-space representative frequency lines ---
+    hGeoMeanLine = gobjects(1);
+    if isfinite(f_geo_mean) && f_geo_mean > 0
+        hGeoMeanLine = plot(ax, [f_geo_mean f_geo_mean], yl, 'k:', 'LineWidth', 1.8);
     end
 
-    hFastMeanLine = gobjects(1);
-    if isfinite(fast_mean) && fast_mean > 0
-        hFastMeanLine = plot(ax, [fast_mean fast_mean], yl, '--', 'LineWidth', 1.4);
-        hFastMeanLine.Color = [0 0.4470 0.7410];  % blue
+    hFastGeoMeanLine = gobjects(1);
+    if isfinite(f_fast_geo_mean) && f_fast_geo_mean > 0
+        hFastGeoMeanLine = plot(ax, [f_fast_geo_mean f_fast_geo_mean], yl, ':', 'LineWidth', 1.8);
+        hFastGeoMeanLine.Color = [0 0.4470 0.7410];
     end
 
-    hSlowMeanLine = gobjects(1);
-    if isfinite(slow_mean) && slow_mean > 0
-        hSlowMeanLine = plot(ax, [slow_mean slow_mean], yl, '--', 'LineWidth', 1.4);
-        hSlowMeanLine.Color = [0.8500 0.3250 0.0980]; % orange
+    hSlowGeoMeanLine = gobjects(1);
+    if isfinite(f_slow_geo_mean) && f_slow_geo_mean > 0
+        hSlowGeoMeanLine = plot(ax, [f_slow_geo_mean f_slow_geo_mean], yl, ':', 'LineWidth', 1.8);
+        hSlowGeoMeanLine.Color = [0.8500 0.3250 0.0980];
     end
 
     ylim(ax, yl);
 
-    title(ax, sprintf('PSD (Welch,Hann) | int=%.3g A^2 | ratio(Eslow/Efast)=%.3g | mean=%.3g std=%.3g (A^2/Hz)', ...
-        PSD_int, ratio_slow_fast, psd_mean, psd_std), 'Interpreter','none');
+    %%% ===================== (HIDDEN) title linear mean text =====================
+    % title(ax, sprintf(['PSD (Welch,Hann) | int=%.3g A^2 | ratio(Eslow/Efast)=%.3g | ', ...
+    %     'lin mean=%.3g Hz | log-space rep.=%.3g Hz'], ...
+    %     PSD_int, ratio_slow_fast, f_mean, f_geo_mean), 'Interpreter','tex');
+    %%% =====================================================================
 
-    % legend (의미있는 라벨만)
+    % --- (kept) title without linear mean ---
+    title(ax, sprintf('PSD (Welch,Hann) | int=%.3g A^2 | ratio(Eslow/Efast)=%.3g | log-space rep.=%.3g Hz', ...
+        PSD_int, ratio_slow_fast, f_geo_mean), 'Interpreter','tex');
+
     legH = [hP];
     legL = ["PSD (Welch)"];
 
@@ -379,17 +481,33 @@ for fileIdx = 1:nLoad
         legH(end+1) = hSlowPatch; %#ok<AGROW>
         legL(end+1) = sprintf("SLOW band (tau=%g~%gs)", tau_slow_range(1), tau_slow_range(2));
     end
-    if isgraphics(hMeanLine)
-        legH(end+1) = hMeanLine; %#ok<AGROW>
-        legL(end+1) = "Total mean f (red --)";
+
+    %%% ===================== (HIDDEN) legend linear mean entries =====================
+    % if isgraphics(hMeanLine)
+    %     legH(end+1) = hMeanLine; %#ok<AGROW>
+    %     legL(end+1) = "Total linear mean f (red --)";
+    % end
+    % if isgraphics(hFastMeanLine)
+    %     legH(end+1) = hFastMeanLine; %#ok<AGROW>
+    %     legL(end+1) = "FAST linear mean f (blue --)";
+    % end
+    % if isgraphics(hSlowMeanLine)
+    %     legH(end+1) = hSlowMeanLine; %#ok<AGROW>
+    %     legL(end+1) = "SLOW linear mean f (orange --)";
+    % end
+    %%% =====================================================================
+
+    if isgraphics(hGeoMeanLine)
+        legH(end+1) = hGeoMeanLine; %#ok<AGROW>
+        legL(end+1) = "Total log-space rep. f (black --)";
     end
-    if isgraphics(hFastMeanLine)
-        legH(end+1) = hFastMeanLine; %#ok<AGROW>
-        legL(end+1) = "FAST mean f (blue --)";
+    if isgraphics(hFastGeoMeanLine)
+        legH(end+1) = hFastGeoMeanLine; %#ok<AGROW>
+        legL(end+1) = "FAST log-space rep. f (blue :)";
     end
-    if isgraphics(hSlowMeanLine)
-        legH(end+1) = hSlowMeanLine; %#ok<AGROW>
-        legL(end+1) = "SLOW mean f (orange --)";
+    if isgraphics(hSlowGeoMeanLine)
+        legH(end+1) = hSlowGeoMeanLine; %#ok<AGROW>
+        legL(end+1) = "SLOW log-space rep. f (orange :)";
     end
 
     legend(ax, legH, legL, 'Location','northeast');
@@ -398,8 +516,6 @@ end
 %% 요약 출력 --------------------------------------------------------------
 fprintf('\n=============== PSD 요약 테이블 ===============\n');
 disp(psd_stat_tbl);
-
-% fprintf("PSD Load unique = %s\n", strjoin(unique(psd_stat_tbl.Load), ", "));
 
 %% 저장 -------------------------------------------------------------------
 writetable(psd_stat_tbl, fullfile(save_dir, "psd_stat_tbl.csv"));
@@ -413,7 +529,7 @@ fprintf("[done] saved psd_stat_tbl(.csv/.mat) to: %s\n", save_dir);
 
 %% ========================= helper function =============================
 function L = standardizeLoadName(nm)
-% nm: file basename without extension (예: "BSL_CITY1_0725", "us06_0725")
+% nm: file basename without extension
 % return: {"US06","UDDS","HWFET","WLTP","CITY1","CITY2","HW1","HW2"} 중 하나
 
 s = upper(string(nm));
@@ -442,7 +558,7 @@ elseif contains(s, "HW1")
 elseif contains(s, "HW2")
     L = "HW2";
 else
-    warning("표준 load 매핑 실패: nm=%s → LoadStd=UNKNOWN", nm);
+    warning("표준 load 매핑 실패: nm=%s -> LoadStd=UNKNOWN", nm);
     L = "UNKNOWN";
 end
 end

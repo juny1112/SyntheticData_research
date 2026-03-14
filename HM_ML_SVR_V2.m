@@ -64,7 +64,7 @@ FIXED_KERNELSCALE = 'auto';       % 또는 숫자
 
 % Random search 설정
 RAND_N_TRIALS = 500;               % 시도 횟수(타겟별)
-RAND_KERNEL_SET = {'gaussian'};  % 시작은 2개만 추천'linear'
+RAND_KERNEL_SET = {'gaussian', 'linear'};  % 시작은 2개만 추천'linear'
 % C, epsilon, kernel scale 샘플링 범위(로그 스케일 권장)
 RAND_C_RANGE_LOG10        = [-3, 1];     % 1e-2 ~ 1e3
 RAND_EPS_RANGE_LOG10      = [-4, 0];     % 1e-3 ~ 1
