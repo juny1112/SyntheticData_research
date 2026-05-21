@@ -1,8 +1,18 @@
 %% ======================================================================
 %  2RC(선택 부하: Tbl_<LOAD>_ECM, 주행부하 온도별) + 스칼라(온도별 DCIR/Power 포함)
-%    → 피처 구성 → 상관분석 (Pearson)
+%    → 피처 구성 → Label vs ECM correlation heatmap (Pearson)
 %
-%  (NEW)
+%  [목표]
+%   - x축: Features (ECM parameters)
+%   - y축: Labels (SOH, SOH-x; scalar labels 자동 선택)
+%   - 전체 상관행렬이 아니라 "보여주고 싶은 상관성만" 직사각 heatmap으로 표시
+%
+%  [핵심]
+%   - x축은 feat2RC_names 전체
+%   - y축은 active_scalar_names 전체 (온도/토글 기반 자동 생성)
+%   - LABEL_NAMES 같은 수동 선택 없음
+%
+%  [기능]
 %   - LOAD_USE_STR에 "US06 CITY1" 처럼 입력하면 해당 주행부하들만 2RC 피처로 사용
 %   - 주행부하 2RC용 온도와 스칼라용 온도를 분리
 %   - RowNames 완전일치 대신 "셀 ID" 기준 매칭
@@ -14,24 +24,23 @@
 clear; clc; close all;
 
 %% ── 설정(토글) ---------------------------------------------------------
-SOC_use = [70];            % 분석에 포함할 SOC들
-DRAW_PAIRPLOT = true;
-SHOW_P_IN_HEATMAP = false; % true: r,p 둘 다 표시 / false: r만 표시
+SOC_use = [70];
+SHOW_P_IN_HEATMAP = false;   % true: r,p 둘 다 표시 / false: r만 표시
 
 % 사용할 주행부하 입력(공백/콤마/세미콜론 지원)
 % 'US06','UDDS','HWFET','WLTP','CITY1','CITY2','HW1','HW2'
-LOAD_USE_STR = "US06 CITY1";   % 예: "US06 CITY1", "US06,CITY1", "US06;CITY1;HW1"
+LOAD_USE_STR = "US06";
 
 % 온도 리스트 분리
-TEMP_list_load   = [20];        % 주행부하 2RC용
-TEMP_list_scalar = [20 10 0];  % DCIR / Power / 기타 스칼라용
+TEMP_list_load   = [20 10 0];          % 주행부하 2RC용
+TEMP_list_scalar = [45 35 20 10 0];    % DCIR / Power / 기타 스칼라용
 
 % 스칼라 활성화 토글
 USE_DELTA            = false;
 USE_RAW_DCIR10S      = true;
 USE_RAW_DCIR1S       = false;
 USE_RCHARG           = true;
-USE_R1S              = true;
+USE_R1S              = false;
 USE_RCHARG_8090      = false;
 USE_POWER            = false;
 
@@ -39,6 +48,11 @@ USE_DCIR1S_BYTEMP    = USE_RAW_DCIR1S;
 USE_DDELTA_BYTEMP    = USE_DELTA;
 USE_DCIR10S_BYTEMP   = USE_RAW_DCIR10S;
 USE_POWER_BYTEMP     = USE_POWER;
+
+% 추가 시각화 옵션
+MARK_STRONG_CORR = true;
+STRONG_CORR_TH   = 0.95;   % 별표 기준
+SHOW_ONLY_ABS_R_OVER = []; % 예: 0.7 로 두면 |r|>=0.7인 feature만 표시, []면 전체 표시
 
 %% ── 경로/파일 ----------------------------------------------------------
 baseDir_2RC = "G:\공유 드라이브\BSL_Data4\HNE_RPT_@50,70_251214_9\Driving\SIM_parsed";
@@ -203,7 +217,7 @@ for t = TEMP_list_load
             ids_tbl_raw   = extractCellIDs(raw_names_tbl);
             [ids_tbl, idx_keep_tbl] = uniqueCellIDsFirst(ids_tbl_raw);
 
-            TblL = TblL(idx_keep_tbl, :);   % ID 중복 시 첫 행만 사용
+            TblL = TblL(idx_keep_tbl, :);
             vnames = TblL.Properties.VariableNames;
 
             [tf_map, loc_map] = ismember(cell_ids, ids_tbl);
@@ -507,8 +521,12 @@ row_valid_active   = all(~isnan(feat_active),2);
 feat_active_valid  = feat_active(row_valid_active, :);
 cells_active_valid = cell_names(row_valid_active);
 
+if isempty(feat_active_valid)
+    error('유효한 행이 없습니다. active feature 구성 또는 NaN 포함 여부를 확인하세요.');
+end
+
 %% ── CSV 저장 -----------------------------------------------------------
-T_full   = array2table(feat_full,   'VariableNames', feat_full_names,   'RowNames', cell_names);
+T_full   = array2table(feat_full, 'VariableNames', feat_full_names, 'RowNames', cell_names);
 T_active = array2table(feat_active_valid, 'VariableNames', feat_active_names, 'RowNames', cells_active_valid);
 
 csv_full   = fullfile(save_path, 'features_allvars_full.csv');
@@ -519,113 +537,52 @@ writetable(T_active, csv_active, 'WriteRowNames', true);
 disp(['features_allvars_full.csv 저장: ' csv_full]);
 disp(['features_allvars_active.csv 저장: ' csv_active]);
 
-%% ── 상관분석/그림 (Pearson) --------------------------------------------
-X = feat_active_valid;
-vnames_active = feat_active_names;
+%% ── Label / Feature 분리 -----------------------------------------------
+% x축: ECM feature 전체
+feature_names_ecm = feat2RC_names;
 
-outfig1 = fullfile(save_path, 'corrmatrix_pair_kde.fig');
-outpng1 = fullfile(save_path, 'corrmatrix_pair_kde.png');
+% y축: active scalar 전체 자동 선택
+label_names = active_scalar_names;
 
-p = size(X,2);
-if DRAW_PAIRPLOT && p >= 2
-    f1 = figure('Color','w','Position',[60 40 1300 950]);
-    [~, AX] = plotmatrix(X);
-    darkBlue  = [0 0.447 0.741];
-    lightBlue = [0.35 0.65 1.00];
+idx_feat_ecm = find(ismember(feat_active_names, feature_names_ecm));
+idx_label    = find(ismember(feat_active_names, label_names));
 
-    for ii = 1:p
-        for jj = 1:p
-            cla(AX(ii,jj));
-            set(AX(ii,jj),'Box','on','FontSize',9);
-
-            if ii == jj
-                xdata = X(:,ii);
-                xdata = xdata(isfinite(xdata));
-                if numel(xdata) >= 2
-                    hold(AX(ii,jj),'on');
-                    try
-                        [f, xi] = ksdensity(xdata);
-                        fill(AX(ii,jj), xi, f, lightBlue, 'FaceAlpha', 0.5, 'EdgeColor', 'none');
-                        plot(AX(ii,jj), xi, f, '-', 'Color', darkBlue, 'LineWidth', 2.0);
-                    catch
-                    end
-                    hold(AX(ii,jj),'off');
-                    if ~isempty(xdata)
-                        xlim(AX(ii,jj), [min(xdata) max(xdata)]);
-                    end
-                end
-            else
-                x = X(:,jj); y = X(:,ii);
-                v = isfinite(x) & isfinite(y);
-                if any(v)
-                    hold(AX(ii,jj),'on');
-                    scatter(AX(ii,jj), x(v), y(v), 15, 'k', 'filled');
-                end
-                n = nnz(v);
-                if n >= 2 && std(x(v))>0 && std(y(v))>0
-                    C = corrcoef(x(v), y(v));
-                    r = C(1,2);
-                    text(AX(ii,jj), 0.05, 0.92, sprintf('r = %.2f', r), ...
-                        'Units','normalized','FontSize',10,'FontWeight','bold', ...
-                        'BackgroundColor','w','Margin',1);
-                end
-                if n >= 3 && std(x(v))>0
-                    c  = polyfit(x(v), y(v), 1);
-                    xf = linspace(min(x(v)), max(x(v)), 100);
-                    yf = polyval(c, xf);
-                    plot(AX(ii,jj), xf, yf, '-', 'Color', darkBlue, 'LineWidth', 1.7);
-                end
-                hold(AX(ii,jj),'off');
-            end
-        end
-    end
-
-    vlabels = arrayfun(@prettyVarLabel, vnames_active, 'UniformOutput', false);
-    for j = 1:p
-        xlabel(AX(p,j), vlabels{j}, 'Interpreter','tex','FontSize',10,'FontWeight','bold');
-        ylabel(AX(j,1), vlabels{j}, 'Interpreter','tex','FontSize',10,'FontWeight','bold');
-        title (AX(j,j), vlabels{j}, 'Interpreter','tex','FontSize',10,'FontWeight','bold');
-    end
-
-    try
-        sgtitle(sprintf('Correlation Matrix (Pearson, pairwise) | Loads: %s', strjoin(load_use, ', ')), ...
-                'Interpreter','none');
-    catch
-    end
-
-    savefig(f1, outfig1);
-    exportgraphics(f1, outpng1, 'Resolution', 220);
+if isempty(idx_feat_ecm)
+    error('ECM feature가 없습니다.');
+end
+if isempty(idx_label)
+    error('선택된 active scalar label이 없습니다. USE_* 토글을 확인하세요.');
 end
 
-%% ── Heatmap ------------------------------------------------------------
-outfig2 = fullfile(save_path, 'corr_heatmap_r_p_ci.fig');
-outpng2 = fullfile(save_path, 'corr_heatmap_r_p_ci.png');
+X_feat  = feat_active_valid(:, idx_feat_ecm);   % x축: ECM features
+X_label = feat_active_valid(:, idx_label);      % y축: scalar labels
 
-[Rmat, Pmat] = corr(X, 'Type','Pearson', 'Rows','pairwise');
-pN = size(Rmat,1);
+feat_names_plot  = feat_active_names(idx_feat_ecm);
+label_names_plot = feat_active_names(idx_label);
 
-Npair  = zeros(pN);
-RL = nan(pN);
-RU = nan(pN);
-zcrit = icdf('Normal',0.975,0,1);
+%% ── 상관 계산 ----------------------------------------------------------
+[R_lf, P_lf] = corr(X_label, X_feat, 'Type','Pearson', 'Rows','pairwise');
 
-for i = 1:pN
-    for j = 1:pN
-        v = isfinite(X(:,i)) & isfinite(X(:,j));
-        Npair(i,j) = nnz(v);
-        if i==j && Npair(i,j)>=2
-            RL(i,j)=1; RU(i,j)=1;
-            continue;
-        end
-        r = Rmat(i,j); n = Npair(i,j);
-        if n>=4 && ~isnan(r) && abs(r)<1
-            z  = atanh(r);
-            se = 1/sqrt(n-3);
-            RL(i,j) = tanh(z - zcrit*se);
-            RU(i,j) = tanh(z + zcrit*se);
-        end
-    end
+% 원하면 |r| 큰 feature만 남김
+if ~isempty(SHOW_ONLY_ABS_R_OVER)
+    maxAbsCorr = max(abs(R_lf), [], 1, 'omitnan');
+    keep_feat = maxAbsCorr >= SHOW_ONLY_ABS_R_OVER;
+
+    X_feat = X_feat(:, keep_feat);
+    feat_names_plot = feat_names_plot(keep_feat);
+    [R_lf, P_lf] = corr(X_label, X_feat, 'Type','Pearson', 'Rows','pairwise');
 end
+
+nL = size(R_lf, 1);
+nF = size(R_lf, 2);
+
+if nF == 0
+    error('표시할 feature가 없습니다. SHOW_ONLY_ABS_R_OVER 조건을 완화하세요.');
+end
+
+%% ── Heatmap: Labels vs ECM features only -------------------------------
+outfig2 = fullfile(save_path, 'corr_heatmap_labels_vs_ecm.fig');
+outpng2 = fullfile(save_path, 'corr_heatmap_labels_vs_ecm.png');
 
 anchors = [ ...
     0.00 0.20 0.80;
@@ -634,87 +591,107 @@ anchors = [ ...
 xs   = [-1 0 1];
 cmap = interp1(xs, anchors, linspace(-1,1,256), 'linear','extrap');
 
-f2 = figure('Color','w','Position',[60 40 1200 950]);
-imagesc(Rmat, [-1 1]); axis image;
+figW = max(1400, 220 + 42*nF);
+figH = max(480,  220 + 45*nL);
+
+f2 = figure('Color','w','Position',[80 80 figW figH]);
+imagesc(R_lf, [-1 1]);
 colormap(cmap);
-cb = colorbar; cb.Label.String = 'Pearson r';
+
+cb = colorbar;
+cb.Label.String = 'Pearson r';
 set(cb,'Ticks',-1:0.5:1,'TickLabels',compose('%.1f',-1:0.5:1));
 
-vlabels = arrayfun(@prettyVarLabel, vnames_active, 'UniformOutput', false);
 ax = gca;
-lbls = cellfun(@(c) sprintf('%s\\newline%s', c{:}), vlabels, 'UniformOutput', false);
-set(ax,'XTick',1:pN,'YTick',1:pN, ...
-       'TickLabelInterpreter','tex','FontSize',10,'FontWeight','bold');
-set(ax,'XTickLabel',lbls,'YTickLabel',lbls);
-xtickangle(ax,45);
+set(ax, 'XTick', 1:nF, 'YTick', 1:nL, ...
+    'FontSize', 10, 'FontWeight', 'bold', ...
+    'TickLabelInterpreter', 'tex');
+
+% x축 라벨
+xlabels = arrayfun(@prettyVarLabel, feat_names_plot, 'UniformOutput', false);
+xlabels = cellfun(@(c) joinPrettyLabel(c), xlabels, 'UniformOutput', false);
+
+% y축 라벨
+ylabels = arrayfun(@prettyVarLabel, label_names_plot, 'UniformOutput', false);
+ylabels = cellfun(@(c) strjoin(c, ' '), ylabels, 'UniformOutput', false);
+
+set(ax, 'XTickLabel', xlabels, 'YTickLabel', ylabels);
+xtickangle(ax, 45);
+
+xlabel('Features (ECM parameters)', 'FontSize', 12, 'FontWeight', 'bold');
+ylabel('Labels (SOH, SOH-x)', 'FontSize', 12, 'FontWeight', 'bold');
+title(sprintf('Correlation: Labels vs ECM Features | Loads: %s', strjoin(load_use, ', ')), ...
+    'Interpreter', 'none', 'FontSize', 13, 'FontWeight', 'bold');
+
 hold on;
 
-for k = 0.5:1:pN+0.5
-    plot([0.5 pN+0.5],[k k],'w-','LineWidth',0.5);
-    plot([k k],[0.5 pN+0.5],'w-','LineWidth',0.5);
+% 격자선
+for k = 0.5:1:nL+0.5
+    plot([0.5 nF+0.5], [k k], 'w-', 'LineWidth', 0.5);
+end
+for k = 0.5:1:nF+0.5
+    plot([k k], [0.5 nL+0.5], 'w-', 'LineWidth', 0.5);
 end
 
-for i = 1:pN
-    for j = 1:pN
-        r = Rmat(i,j);
+% 셀 텍스트
+for i = 1:nL
+    for j = 1:nF
+        r = R_lf(i,j);
+        pval = P_lf(i,j);
+
         if isnan(r), continue; end
 
-        pval = Pmat(i,j);
-        idx = max(1, min(256, 1+round((r+1)/2*255)));
+        idx = max(1, min(256, 1 + round((r+1)/2 * 255)));
         cc  = cmap(idx,:);
-        YIQ = 0.299*cc(1)+0.587*cc(2)+0.114*cc(3);
-        tcol = [0 0 0];
+        YIQ = 0.299*cc(1) + 0.587*cc(2) + 0.114*cc(3);
+
         if YIQ < 0.5
             tcol = [1 1 1];
+        else
+            tcol = [0 0 0];
         end
 
         if SHOW_P_IN_HEATMAP
             txt = sprintf('r=%.2f\np=%.3g', r, pval);
         else
-            txt = sprintf('r=%.2f', r);
+            txt = sprintf('%.2f', r);
         end
 
-        text(j, i, txt, 'HorizontalAlignment','center', ...
-            'VerticalAlignment','middle','FontSize',9, ...
-            'FontWeight','bold','Color',tcol);
+        text(j, i, txt, ...
+            'HorizontalAlignment', 'center', ...
+            'VerticalAlignment', 'middle', ...
+            'FontSize', 9, ...
+            'FontWeight', 'bold', ...
+            'Color', tcol);
 
-        if isfinite(r) && abs(r) > 0.9 && i~=j
-            ydir   = get(gca,'YDir');
-            margin = 0.01;
-            if strcmpi(ydir,'reverse')
-                y = i - 0.5 + margin;
-            else
-                y = i + 0.5 - margin;
-            end
-            text(j, y, '*', 'Color',[1 1 0], 'FontSize',12, 'FontWeight','bold', ...
-                'HorizontalAlignment','center','VerticalAlignment','top');
+        if MARK_STRONG_CORR && isfinite(r) && abs(r) >= STRONG_CORR_TH
+            text(j, i-0.30, '*', ...
+                'HorizontalAlignment','center', ...
+                'VerticalAlignment','middle', ...
+                'FontSize',12, ...
+                'FontWeight','bold', ...
+                'Color',[1 1 0]);
         end
     end
 end
 
-if SHOW_P_IN_HEATMAP
-    ttl = sprintf('Loads: %s - Correlation heatmap (r, p, 95%% CI; * if |r|>0.9)', strjoin(load_use, ', '));
-else
-    ttl = sprintf('Loads: %s - Correlation heatmap (r, 95%% CI; * if |r|>0.9)', strjoin(load_use, ', '));
-end
-title(ttl, 'Interpreter','none');
-
 savefig(f2, outfig2);
 exportgraphics(f2, outpng2, 'Resolution', 220);
 
-%% ── 상관 행렬 저장 -----------------------------------------------------
-[R_pearson, P_pearson] = deal(Rmat, Pmat);
-Tcorr = array2table(R_pearson, 'VariableNames', vnames_active, 'RowNames', vnames_active);
-Tpval = array2table(P_pearson,  'VariableNames', vnames_active, 'RowNames', vnames_active);
+%% ── 저장: Labels vs ECM -----------------------------------------------
+Tcorr = array2table(R_lf, 'VariableNames', feat_names_plot, 'RowNames', label_names_plot);
+Tpval = array2table(P_lf, 'VariableNames', feat_names_plot, 'RowNames', label_names_plot);
 
-writetable(Tcorr, fullfile(save_path, 'corr_pearson.csv'), 'WriteRowNames', true);
-writetable(Tpval,  fullfile(save_path, 'pval_pearson.csv'), 'WriteRowNames', true);
-save(fullfile(save_path, 'corr_pearson.mat'), ...
-    'R_pearson', 'P_pearson', 'vnames_active', 'cells_active_valid', ...
-    'SOC_use', 'LOAD_USE_STR', 'TEMP_list_load', 'TEMP_list_scalar', ...
-    'cell_ids', 'SHOW_P_IN_HEATMAP');
+writetable(Tcorr, fullfile(save_path, 'corr_labels_vs_ecm.csv'), 'WriteRowNames', true);
+writetable(Tpval, fullfile(save_path, 'pval_labels_vs_ecm.csv'), 'WriteRowNames', true);
 
-disp('corr_pearson.csv / pval_pearson.csv / corr_pearson.mat 저장 완료');
+save(fullfile(save_path, 'corr_labels_vs_ecm.mat'), ...
+    'R_lf', 'P_lf', 'feat_names_plot', 'label_names_plot', ...
+    'cells_active_valid', 'SOC_use', 'LOAD_USE_STR', ...
+    'TEMP_list_load', 'TEMP_list_scalar', 'cell_ids', ...
+    'SHOW_P_IN_HEATMAP', 'MARK_STRONG_CORR', 'STRONG_CORR_TH', 'SHOW_ONLY_ABS_R_OVER');
+
+disp('corr_labels_vs_ecm.csv / pval_labels_vs_ecm.csv / corr_labels_vs_ecm.mat 저장 완료');
 
 %% ========================= 보조 함수들 =================================
 function loads = parseLoadList(str0)
@@ -784,6 +761,14 @@ function [ids_unique, idx_keep] = uniqueCellIDsFirst(ids)
     idx_keep = idx_valid(ia);
 end
 
+function s = joinPrettyLabel(c)
+    if numel(c) == 1
+        s = c{1};
+    else
+        s = sprintf('%s\\newline%s', c{:});
+    end
+end
+
 function lab = prettyVarLabel(name0)
     name = char(name0);
 
@@ -834,7 +819,7 @@ function lab = prettyVarLabel(name0)
         return
     end
 
-    % fallback: 예전 형식도 호환
+    % fallback
     tok3 = regexp(name,'^([A-Za-z0-9]+)_(R0|R1|R2|tau1|tau2)_(\d+)$','tokens','once');
     if ~isempty(tok3)
         loadName = tok3{1};

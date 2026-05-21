@@ -12,7 +12,7 @@
 clc; clear; close all;
 
 %% ── 경로 & 파일 리스트 ───────────────────────────────────────────────
-folder_SIM = 'G:\공유 드라이브\BSL_Data4\HNE_fresh_integrated_7_Drivingprocessed\SIM_parsed';
+folder_SIM = 'G:\공유 드라이브\BSL_Data4\HNE_RPT_@50,70_251214_9\Driving\SIM_parsed\20degC\이름정렬';
 
 sim_files  = dir(fullfile(folder_SIM,"*_SIM.mat"));
 if isempty(sim_files)
@@ -23,11 +23,11 @@ end
 save_root = fileparts(folder_SIM);          % -> ...\SIM_parsed
 
 fit_window_sec = 600;  % ★ 핵심: 600초로 트리밍하여 피팅
-save_path = fullfile(save_root, sprintf('2RC_fitting_%ds', fit_window_sec));
+save_path = fullfile(save_root, sprintf('TEST_2RC_fitting_%ds', fit_window_sec));
 if ~exist(save_path,'dir'); mkdir(save_path); end
 
 %% ── 사용자 설정: 존재 SOC 목록(여기만 바꾸면 됨) ─────────────────────
-SOC_list = [90 70 50 30];          % 예: SOC 70, 50만 존재
+SOC_list = [70 50];          % 예: [90 50]
 nSOC     = numel(SOC_list);
 
 % (옵션) 블록 그룹핑 사용 여부
@@ -486,6 +486,31 @@ else
         assignin('base', sprintf('Tbl_%s_ECM',  loadName), T_ECM);
         assignin('base', sprintf('Tbl_%s_RMSE', loadName), T_RMSE);
     end
+end
+
+% === 추가: 파이썬 PINN 학습용 통합 True ECM CSV 저장 ===
+if exist('Tbl_Load_ECM','var')
+    all_loads_ecm_table = table();
+    load_flds = fieldnames(Tbl_Load_ECM);
+    
+    for i = 1:numel(load_flds)
+        lnam = load_flds{i};
+        T_tmp = Tbl_Load_ECM.(lnam);
+        
+        % 1) 셀 이름과 부하 이름을 컬럼으로 명시적으로 추가
+        T_tmp.Cell_Name = T_tmp.Properties.RowNames;
+        T_tmp.Load_Type = repmat(string(lnam), height(T_tmp), 1);
+        
+        % 2) ★ 중요: 행 이름 중복 에러를 방지하기 위해 행 이름을 비워줌
+        T_tmp.Properties.RowNames = {}; 
+        
+        % 3) 이제 테이블을 수직으로 결합
+        all_loads_ecm_table = [all_loads_ecm_table; T_tmp];
+    end
+    
+    % CSV 저장
+    writetable(all_loads_ecm_table, fullfile(save_path, 'True_ECM_Labels.csv'), 'WriteRowNames', false);
+    fprintf('PINN 학습용 정답지 저장 완료: True_ECM_Labels.csv\n');
 end
 
 %% 결과 저장

@@ -6,25 +6,25 @@
 %          * Tbl_<LOAD>_ECM.RowNames : 셀 이름
 %          * Tbl_<LOAD>_ECM.VarNames: SOC70_R0_mOhm, SOC70_R1_mOhm, ..., SOC50_tau2
 %
-%  (NEW)
-%   - LOAD_USE_STR에 "US06 CITY1" 처럼 입력하면 해당 주행부하들만 2RC 피처로 사용
-%   - 피처명: <LOAD>_<param>_<SOC>  (예: CITY1_R0_70)
-%   - label(타겟)도 pool/active 구조로 여러 개 동시 실행
+%  - LOAD_USE_STR에 "US06 CITY1" 처럼 입력하면 해당 주행부하들만 2RC 피처로 사용
+%  - 피처명: <LOAD>_<param>_<SOC>  (예: CITY1_R0_70)
+%  - label(타겟)도 pool/active 구조로 여러 개 동시 실행
 %
 %  - SVR 설정:
 %       * 입력 X : 선택 SOC의 (선택 주행부하) ECM 파라미터 (R0,R1,R2,tau1,tau2)
 %       * 출력 y : 사용자 label (토글로 선택)
 %       * train/test split 없음 -> 전체 데이터로 학습하고 train 내 오차만 계산
-%       * 표준화(Standardize)=true 권장
-%       * Kernel: rbf(=gaussian) 기본, 필요 시 linear/polynomial 등 변경
+%       * Standardize = true
+%       * linear SVR
+%       * BoxConstraint, Epsilon ratio grid search
 %
-%  - 출력( save_path ):
-%       각 타겟별 모델, 예측결과, 성능지표, 그림, (선택)모델 export
+%  - 출력(save_path):
+%       각 타겟별 best 모델, 예측결과, 성능지표, 그림, grid search 결과표
 % ======================================================================
 clear; clc; close all;
 
 % ======================================================================
-% (A PATCH) 저장 시 Text Interpreter 에러(LaTeX/TeX 파싱) 원천 차단
+% 저장 시 Text Interpreter 에러 방지
 % ======================================================================
 set(groot,'defaultTextInterpreter','none');
 set(groot,'defaultAxesTickLabelInterpreter','none');
@@ -48,24 +48,29 @@ PRED_DCIR10S_BYTEMP  = true;
 PRED_DDELTA_BYTEMP   = false;
 PRED_POWER_BYTEMP    = true;
 
-% ── SVR 하이퍼파라미터(기본값 + 튜닝 옵션) ------------------------------
-SVR_KERNEL        = 'linear';   % 'gaussian' | 'linear' | 'polynomial'
-SVR_STANDARDIZE   = true;         % SVR은 표준화 강추
+% ── SVR 기본 설정 -------------------------------------------------------
+SVR_KERNEL      = 'linear';
+SVR_STANDARDIZE = true;
 
-SVR_EPSILON_MODE = "pct_range";   % "fixed" | "pct_range" | "pct_mean"
-SVR_EPSILON_PCT  = 0.05;
-SVR_EPSILON      = 0.1;           % fixed일 때만 사용
+% ======================================================================
+% GRID SEARCH 설정
+% ======================================================================
+BOX_GRID       = [1e-2, 1e-1, 1, 10, 100];
+EPS_RATIO_GRID = [0.01, 0.03, 0.05, 0.10];
 
-SVR_BOXCONSTRAINT = 1;            % C, 필요 시 조정
-SVR_KERNELSCALE   = 'auto';       % 'auto' 또는 숫자(예: 0.5, 1, 2 ...)
-DO_BAYESOPT       = false;        % true면 Bayesian optimization으로 자동 튜닝
+% tie-break 기준:
+%   1) RMSE 최소
+%   2) 같으면 R2 최대
+%   3) 같으면 더 작은 BoxConstraint
+%   4) 같으면 더 작은 epsilon ratio
+GRID_TIE_TOL = 1e-12;
 
 %% ── 경로/파일 ----------------------------------------------------------
 matPath   = "G:\공유 드라이브\BSL_Data4\HNE_RPT_@50,70_251214_9\Driving\SIM_parsed\20degC\2RC_fitting_600s\2RC_results_600s.mat";
 save_path = 'G:\공유 드라이브\BSL_Data4\HNE_RPT_@50,70_251214_9\Driving\SIM_parsed\ML_SVR';
 if ~exist(save_path, 'dir'), mkdir(save_path); end
 
-%% ── 주행부하 파싱/검증(입력 문자열 기반) --------------------------------
+%% ── 주행부하 파싱/검증 --------------------------------------------------
 loadNames_all = {'US06','UDDS','HWFET','WLTP','CITY1','CITY2','HW1','HW2'};
 
 load_use = parseLoadList(LOAD_USE_STR);
@@ -90,7 +95,7 @@ if isempty(load_use)
 end
 fprintf('>> 선택된 주행부하: %s\n', strjoin(load_use, ', '));
 
-%% ── 2RC 테이블 로드(부하별) --------------------------------------------
+%% ── 2RC 테이블 로드 ----------------------------------------------------
 S = load(matPath);
 getTblECM = @(loadName) localGetTblECM(S, loadName);
 
@@ -128,7 +133,7 @@ end
 nC = numel(cell_names);
 fprintf('>> 공통 셀 개수: %d\n', nC);
 
-%% ── 2RC 피처 구성: (부하 선택 + SOC_use) -------------------------------
+%% ── 2RC 피처 구성 ------------------------------------------------------
 pNames_2RC = {'R0','R1','R2','tau1','tau2'};
 
 feat2RC_names = {};
@@ -189,12 +194,12 @@ base_valid_X = all(isfinite(X), 2);
 fprintf('\n[SVR] 사용할 입력 피처(%d개):\n', nFeat);
 disp(strjoin(feat2RC_names, ', '));
 
-%% ── 타겟(label) 입력(셀 순서=cell_names 순서) --------------------------
+%% ── 타겟(label) 입력 ----------------------------------------------------
 fprintf('\n셀 순서(%d개):\n', nC);
 disp(strjoin(cell_names, ', '));
 
 % ======================================================================
-% [여기부터 "입력 받아주는 구간"]  (네가 쓰던 형태 그대로)
+% [여기부터 입력 구간]
 % ======================================================================
 QC2_user      = [56.14;55.93;52.55;50.52;52.13;48.53;56.34;55.15;39.89;55.63;55.57;56.86];
 QC40_user     = [57.49;57.57;54;52.22;53.45;51.28;57.91;56.51;42.14;57.27;57.18;58.4];
@@ -214,32 +219,32 @@ Rcharg_80_90_avg_user = nan(nC,1);
 R1s_user      = nan(nC,1);
 
 DCIR1s_T20_user    = nan(nC,1);
-DCIR10s_T20_user   = [1.60 
-1.41 
-2.33 
-1.88 
-2.06 
-1.93 
-1.35 
-1.53 
-3.55 
-0.82 
-1.52 
+DCIR10s_T20_user   = [1.60
+1.41
+2.33
+1.88
+2.06
+1.93
+1.35
+1.53
+3.55
+0.82
+1.52
 1.47];
 DCIRdelta_T20_user = nan(nC,1);
-Power_T20_user     = [2089.79 
-2372.03 
-1427.37 
-1735.16 
-1603.14 
-1677.27 
-2476.97 
-2191.48 
-914.67 
-4067.20 
-2196.09 
+Power_T20_user     = [2089.79
+2372.03
+1427.37
+1735.16
+1603.14
+1677.27
+2476.97
+2191.48
+914.67
+4067.20
+2196.09
 2278.82];
-Power_T20_user = Power_T20_user / 1000; % W -> kW 단위 변경
+Power_T20_user = Power_T20_user / 1000; % W -> kW
 % ======================================================================
 % [입력 구간 끝]
 % ======================================================================
@@ -264,14 +269,6 @@ DCIRd_byT   = struct('T20',DCIRdelta_T20_user);
 Power_byT   = struct('T20',Power_T20_user);
 
 %% ── 타겟 이름 / 벡터 매핑(pool) ----------------------------------------
-target_pool_names = {'QC2','QC40','Rcharg','Rcharg_80_90_avg','R1s'};
-for t = TEMP_list
-    target_pool_names{end+1} = sprintf('DCIR_1s_T%d', t);            %#ok<AGROW>
-    target_pool_names{end+1} = sprintf('DCIR_10s_T%d', t);           %#ok<AGROW>
-    target_pool_names{end+1} = sprintf('DCIR_delta_10s_1s_T%d', t);  %#ok<AGROW>
-    target_pool_names{end+1} = sprintf('Power_T%d', t);              %#ok<AGROW>
-end
-
 target_values = containers.Map();
 target_values('QC2')              = QC2_user(:);
 target_values('QC40')             = QC40_user(:);
@@ -304,7 +301,7 @@ for t = TEMP_list
     target_values(sprintf('Power_T%d', t))             = pw;
 end
 
-%% ── 토글 기반 active target list ---------------------------------------
+%% ── active target list -------------------------------------------------
 target_active = {};
 if PRED_QC2,          target_active{end+1} = 'QC2';              end
 if PRED_QC40,         target_active{end+1} = 'QC40';             end
@@ -326,7 +323,7 @@ end
 fprintf('\n[SVR] 활성 타겟:\n');
 disp(strjoin(target_active, ', '));
 
-%% ── 전체 X / 각 타겟에 대한 SVR (train-only) ---------------------------
+%% ── 전체 X / 각 타겟에 대한 SVR(train-only + grid search) -------------
 results = struct();
 nFeatX  = size(X,2);
 
@@ -337,7 +334,8 @@ for tt = 1:numel(target_active)
     idx_valid = base_valid_X & isfinite(y);
     n_valid   = nnz(idx_valid);
 
-    fprintf('\n[SVR] Target = %s, 유효 샘플 수 = %d / %d\n', tname, n_valid, nC);
+    fprintf('\n============================================================\n');
+    fprintf('[SVR] Target = %s, 유효 샘플 수 = %d / %d\n', tname, n_valid, nC);
 
     if n_valid < nFeatX + 1
         warning('타겟 %s: 유효 샘플이 너무 적어 (n_valid=%d < nFeat+1=%d) 학습 불가. 건너뜁니다.', ...
@@ -348,88 +346,142 @@ for tt = 1:numel(target_active)
     Xv = X(idx_valid, :);
     yv = y(idx_valid);
 
-    % --- epsilon을 타겟별로 결정 ---
-    switch SVR_EPSILON_MODE
-        case "fixed"
-            eps_t = SVR_EPSILON;
-
-        case "pct_range"
-            yrng = max(yv) - min(yv);
-            eps_t = SVR_EPSILON_PCT * yrng;
-
-        case "pct_mean"
-            eps_t = SVR_EPSILON_PCT * mean(abs(yv));
+    yrng = max(yv) - min(yv);
+    if ~isfinite(yrng) || yrng <= 0
+        yrng = 1;
     end
 
-    % 예외 처리 (상수 타겟/데이터 이상)
-    if ~isfinite(eps_t) || eps_t <= 0
-        eps_t = 0.1;
+    % --------------------------------------------------------------
+    % Grid search
+    % --------------------------------------------------------------
+    gridRows = [];
+    rowCnt = 0;
+
+    best_mdl       = [];
+    best_yhat      = [];
+    best_res       = [];
+    best_RMSE      = inf;
+    best_MAE       = inf;
+    best_R2        = -inf;
+    best_Box       = NaN;
+    best_EpsRatio  = NaN;
+    best_Epsilon   = NaN;
+
+    for ib = 1:numel(BOX_GRID)
+        boxC = BOX_GRID(ib);
+
+        for ie = 1:numel(EPS_RATIO_GRID)
+            eps_ratio = EPS_RATIO_GRID(ie);
+            eps_t     = eps_ratio * yrng;
+
+            if ~isfinite(eps_t) || eps_t <= 0
+                eps_t = 0.1;
+            end
+
+            mdl_try = fitrsvm(Xv, yv, ...
+                'KernelFunction', SVR_KERNEL, ...
+                'Standardize',   SVR_STANDARDIZE, ...
+                'Epsilon',       eps_t, ...
+                'BoxConstraint', boxC);
+
+            y_hat_try = predict(mdl_try, Xv);
+            res_try   = yv - y_hat_try;
+
+            RMSE_try = sqrt(mean(res_try.^2));
+            MAE_try  = mean(abs(res_try));
+
+            SSres = sum((yv - y_hat_try).^2);
+            SStot = sum((yv - mean(yv)).^2);
+            if SStot <= eps
+                R2_try = NaN;
+            else
+                R2_try = 1 - SSres / SStot;
+            end
+
+            rowCnt = rowCnt + 1;
+            gridRows(rowCnt,1) = boxC;      %#ok<SAGROW>
+            gridRows(rowCnt,2) = eps_ratio; %#ok<SAGROW>
+            gridRows(rowCnt,3) = eps_t;     %#ok<SAGROW>
+            gridRows(rowCnt,4) = RMSE_try;  %#ok<SAGROW>
+            gridRows(rowCnt,5) = MAE_try;   %#ok<SAGROW>
+            gridRows(rowCnt,6) = R2_try;    %#ok<SAGROW>
+
+            isBetter = false;
+
+            if RMSE_try < best_RMSE - GRID_TIE_TOL
+                isBetter = true;
+            elseif abs(RMSE_try - best_RMSE) <= GRID_TIE_TOL
+                if (isnan(best_R2) && ~isnan(R2_try)) || (~isnan(R2_try) && R2_try > best_R2 + GRID_TIE_TOL)
+                    isBetter = true;
+                elseif ((isnan(best_R2) && isnan(R2_try)) || abs(R2_try - best_R2) <= GRID_TIE_TOL)
+                    if boxC < best_Box - GRID_TIE_TOL
+                        isBetter = true;
+                    elseif abs(boxC - best_Box) <= GRID_TIE_TOL
+                        if eps_ratio < best_EpsRatio - GRID_TIE_TOL
+                            isBetter = true;
+                        end
+                    end
+                end
+            end
+
+            if isBetter
+                best_mdl      = mdl_try;
+                best_yhat     = y_hat_try;
+                best_res      = res_try;
+                best_RMSE     = RMSE_try;
+                best_MAE      = MAE_try;
+                best_R2       = R2_try;
+                best_Box      = boxC;
+                best_EpsRatio = eps_ratio;
+                best_Epsilon  = eps_t;
+            end
+        end
     end
 
-    % ---- SVR 모델 학습 ----
-    if DO_BAYESOPT
-        % 자동 튜닝(시간 오래 걸릴 수 있음)
-        optimVars = {'BoxConstraint','Epsilon','KernelScale'};
-        mdl = fitrsvm(Xv, yv, ...
-            'KernelFunction', SVR_KERNEL, ...
-            'Standardize', SVR_STANDARDIZE, ...
-            'OptimizeHyperparameters', optimVars, ...
-            'HyperparameterOptimizationOptions', struct( ...
-                'AcquisitionFunctionName','expected-improvement-plus', ...
-                'ShowPlots', false, ...
-                'Verbose', 0));
-    else
-        mdl = fitrsvm(Xv, yv, ...
-            'KernelFunction', SVR_KERNEL, ...
-            'Standardize',   SVR_STANDARDIZE, ...
-            'Epsilon',       eps_t, ...
-            'BoxConstraint', SVR_BOXCONSTRAINT, ...
-            'KernelScale',   SVR_KERNELSCALE);
-    end
+    gridTbl = array2table(gridRows, ...
+        'VariableNames', {'BoxConstraint','EpsilonRatio','Epsilon','RMSE','MAE','R2'});
+    gridTbl = sortrows(gridTbl, {'RMSE','MAE','R2'}, {'ascend','ascend','descend'});
 
-    y_hat = predict(mdl, Xv);
-    res   = yv - y_hat;
+    fprintf('[Best] %s\n', tname);
+    fprintf('  Kernel       = %s\n', SVR_KERNEL);
+    fprintf('  BoxConstraint= %.6g\n', best_Box);
+    fprintf('  EpsRatio     = %.6g\n', best_EpsRatio);
+    fprintf('  Epsilon      = %.6g\n', best_Epsilon);
+    fprintf('  R^2          = %.4f\n', best_R2);
+    fprintf('  RMSE         = %.4f\n', best_RMSE);
+    fprintf('  MAE          = %.4f\n', best_MAE);
 
-    RMSE = sqrt(mean(res.^2));
-    MAE  = mean(abs(res));
+    results.(tname).mdl             = best_mdl;
+    results.(tname).X               = Xv;
+    results.(tname).y_true          = yv;
+    results.(tname).y_pred          = best_yhat;
+    results.(tname).residuals       = best_res;
+    results.(tname).R2              = best_R2;
+    results.(tname).RMSE            = best_RMSE;
+    results.(tname).MAE             = best_MAE;
+    results.(tname).idx_valid       = idx_valid;
+    results.(tname).feature_names   = feat2RC_names;
+    results.(tname).SOC_use         = SOC_use;
+    results.(tname).LOAD_USE_STR    = LOAD_USE_STR;
+    results.(tname).svr_kernel      = SVR_KERNEL;
+    results.(tname).best_box        = best_Box;
+    results.(tname).best_eps_ratio  = best_EpsRatio;
+    results.(tname).best_epsilon    = best_Epsilon;
+    results.(tname).grid_table      = gridTbl;
 
-    % SVR은 mdl.Rsquared 없음 -> 직접 계산
-    SSres = sum((yv - y_hat).^2);
-    SStot = sum((yv - mean(yv)).^2);
-    if SStot <= eps
-        R2 = NaN;   % 또는 1로 둘 수도 있는데 보통 NaN 처리
-    else
-        R2 = 1 - SSres / SStot;
-    end
+    % ---- grid search 결과 csv 저장 ------------------------------------
+    writetable(gridTbl, fullfile(save_path, sprintf('SVR_%s_gridsearch_results.csv', tname)));
 
-    fprintf('  R^2   = %.4f\n', R2);
-    fprintf('  RMSE  = %.4f\n', RMSE);
-    fprintf('  MAE   = %.4f\n', MAE);
-
-    results.(tname).mdl           = mdl;
-    results.(tname).X             = Xv;
-    results.(tname).y_true        = yv;
-    results.(tname).y_pred        = y_hat;
-    results.(tname).residuals     = res;
-    results.(tname).R2            = R2;
-    results.(tname).RMSE          = RMSE;
-    results.(tname).MAE           = MAE;
-    results.(tname).idx_valid     = idx_valid;
-    results.(tname).feature_names = feat2RC_names;
-    results.(tname).SOC_use       = SOC_use;
-    results.(tname).LOAD_USE_STR  = LOAD_USE_STR;
-    results.(tname).svr_kernel    = SVR_KERNEL;
-
-    %% ---- 예측 vs 실제 scatter plot -----------------------------------
+    % ---- 예측 vs 실제 scatter plot -----------------------------------
     fig1 = figure('Color','w','Name',sprintf('SVR_%s_true_vs_pred',tname));
-    scatter(yv, y_hat, 40, 'k', 'filled'); hold on; grid on;
-    minv = min([yv; y_hat]); maxv = max([yv; y_hat]);
+    scatter(yv, best_yhat, 40, 'k', 'filled'); hold on; grid on;
+    minv = min([yv; best_yhat]); maxv = max([yv; best_yhat]);
     plot([minv maxv], [minv maxv], 'r--', 'LineWidth', 1.5);
 
     xlabel(sprintf('True %s', tname), 'FontSize', 11, 'FontWeight','bold', 'Interpreter','none');
     ylabel(sprintf('Predicted %s', tname), 'FontSize', 11, 'FontWeight','bold', 'Interpreter','none');
-    title(sprintf('SVR(%s): %s | Loads: %s (R^2=%.3f, RMSE=%.3f)', ...
-        SVR_KERNEL, tname, strjoin(load_use, ', '), R2, RMSE), ...
+    title(sprintf('SVR(%s): %s | Loads: %s | R^2=%.3f, RMSE=%.3f', ...
+        SVR_KERNEL, tname, strjoin(load_use, ', '), best_R2, best_RMSE), ...
         'FontSize', 10, 'FontWeight','bold', 'Interpreter','none');
 
     axis equal; axis tight;
@@ -439,11 +491,11 @@ for tt = 1:numel(target_active)
     savefig(fig1, outfig1);
     exportgraphics(fig1, outpng1, 'Resolution', 220);
 
-    %% ---- 잔차 plot -----------------------------------------------------
+    % ---- residual plot ------------------------------------------------
     fig2 = figure('Color','w','Name',sprintf('SVR_%s_residuals',tname));
 
     subplot(2,1,1);
-    plot(res, 'o-','LineWidth',1.2);
+    plot(best_res, 'o-','LineWidth',1.2);
     grid on;
     xlabel('Sample index (valid rows)', 'Interpreter','none');
     ylabel('Residual', 'Interpreter','none');
@@ -451,7 +503,7 @@ for tt = 1:numel(target_active)
         'FontWeight','bold', 'Interpreter','none');
 
     subplot(2,1,2);
-    histogram(res, 'NumBins', max(5, round(sqrt(numel(res)))));
+    histogram(best_res, 'NumBins', max(5, round(sqrt(numel(best_res)))));
     grid on;
     xlabel('Residual', 'Interpreter','none');
     ylabel('Count', 'Interpreter','none');
@@ -461,18 +513,14 @@ for tt = 1:numel(target_active)
     outpng2 = fullfile(save_path, sprintf('SVR_%s_residuals.png', tname));
     savefig(fig2, outfig2);
     exportgraphics(fig2, outpng2, 'Resolution', 220);
-
-    %% ---- (선택) 모델 export -------------------------------------------
-    % mdlmat = fullfile(save_path, sprintf('SVR_model_%s.mat', tname));
-    % save(mdlmat, 'mdl');
 end
 
-%% ── 전체 결과 .mat 저장 ------------------------------------------------
+%% ── 전체 결과 저장 ------------------------------------------------------
 save(fullfile(save_path, 'SVR_results_all.mat'), ...
     'results', 'X', 'feat2RC_names', 'cell_names', ...
     'SOC_use', 'pNames_2RC', 'LOAD_USE_STR', 'TEMP_list', ...
-    'SVR_KERNEL','SVR_STANDARDIZE','SVR_EPSILON_MODE','SVR_EPSILON_PCT', ...
-    'SVR_EPSILON','SVR_BOXCONSTRAINT','SVR_KERNELSCALE','DO_BAYESOPT');
+    'SVR_KERNEL', 'SVR_STANDARDIZE', ...
+    'BOX_GRID', 'EPS_RATIO_GRID');
 
 disp('모든 SVR 결과 저장 완료.');
 

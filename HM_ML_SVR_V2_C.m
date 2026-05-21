@@ -1,11 +1,16 @@
 %% ======================================================================
 %  SVR: 2RC(부하별 Tbl_<LOAD>_ECM) + labels
+%  [MODIFIED] feature = R0, R1, R2, C1, C2
+%
+%  C1 = tau1 / R1_mOhm   [kF]
+%  C2 = tau2 / R2_mOhm   [kF]
+%
 %  - sample = (cell, load)
-%  - X = 해당 load의 2RC 파라미터(5×SOC_use)
+%  - X = 해당 load의 2RC 파라미터(5×SOC_use) = [R0, R1, R2, C1, C2]
 %  - y = 셀 라벨을 load 개수만큼 복제
 %
 %  [SPLIT]
-%   - test load: LOAD_TEST_STR (사용자 지정)
+%   - test load: LOAD_TEST_STR
 %   - train/val load: LOAD_TRAINVAL_STR (비우면 = LOAD_USE - LOAD_TEST)
 %
 %  [CV]  (LOAD-level)
@@ -16,8 +21,7 @@
 %  [TUNING]
 %   - TUNE_MODE="fixed": 지정 hyperparam 1회
 %   - TUNE_MODE="random": Random search로 (C, epsilon, kernel scale, kernel) 탐색
-%     + Early-stop(탐색 조기종료) 옵션 포함
-% ======================================================================
+%% ======================================================================
 clear; clc; close all;
 
 % (A PATCH) Text Interpreter 에러 방지
@@ -28,16 +32,12 @@ set(groot,'defaultLegendInterpreter','none');
 %% ── 설정 --------------------------------------------------------------
 SOC_use = [70];
 
-% 전체 load 풀
 LOAD_USE_STR = "US06 UDDS HWFET WLTP CITY1 CITY2 HW1 HW2";
 
-% ★ load split: test는 네가 고름
-LOAD_TEST_STR     = "US06";   % 예: "HW2" 또는 "US06 HW2"
-LOAD_TRAINVAL_STR = "";       % 비우면 자동 = LOAD_USE - LOAD_TEST
+LOAD_TEST_STR     = "US06";
+LOAD_TRAINVAL_STR = "";
 
-% ★ train/val 내부 CV fold 수 (load 단위)
 K_FOLD = 7;
-
 TEMP_list = [20];
 
 % ---- 타겟 토글 ----
@@ -53,35 +53,30 @@ PRED_DDELTA_BYTEMP  = false;
 PRED_POWER_BYTEMP   = true;
 
 % ---- SVR 기본/튜닝 ----
-SVR_STANDARDIZE = true;   % (중요) SVR은 거의 항상 true 추천
+SVR_STANDARDIZE = true;
 
-% 튜닝 모드
-TUNE_MODE = "random";     % "fixed" | "random"
-FIXED_KERNEL      = 'gaussian';   % fixed일 때
+TUNE_MODE = "random";      % "fixed" | "random"
+FIXED_KERNEL      = 'gaussian';
 FIXED_C           = 10;
 FIXED_EPSILON     = 0.05;
-FIXED_KERNELSCALE = 'auto';       % 또는 숫자
+FIXED_KERNELSCALE = 'auto';
 
-% Random search 설정
-RAND_N_TRIALS = 1000;               % 시도 횟수(타겟별)
-RAND_KERNEL_SET = {'linear'};  % 시작은 2개만 추천'linear' , 'linear'
-% C, epsilon, kernel scale 샘플링 범위(로그 스케일 권장)
-RAND_C_RANGE_LOG10        = [-3, 1];     % 1e-2 ~ 1e3
-RAND_EPS_RANGE_LOG10      = [-4, 0];     % 1e-3 ~ 1
-RAND_KS_RANGE_LOG10       = [-3, 2];     % 1e-2 ~ 1e2 (gaussian에서만 의미 큼)
-RAND_USE_AUTO_KERNELSCALE = true;        % true면 KernelScale은 auto도 후보로 섞음
+RAND_N_TRIALS = 1000;
+RAND_KERNEL_SET = {'linear'}; %'linear', 
+RAND_C_RANGE_LOG10        = [-3, 1];
+RAND_EPS_RANGE_LOG10      = [-4, 0];
+RAND_KS_RANGE_LOG10       = [-3, 2];
+RAND_USE_AUTO_KERNELSCALE = true;
 
-% Random search early stopping (탐색 조기종료)
 EARLYSTOP_ENABLE  = false;
-EARLYSTOP_PATIENCE = 15;  % 최근 PATIENCE번 동안 best 개선 없으면 중단
-EARLYSTOP_MIN_IMPROVE = 1e-4; % RMSE 기준 개선폭 임계
+EARLYSTOP_PATIENCE = 15;
+EARLYSTOP_MIN_IMPROVE = 1e-4;
 
-% 성능지표 선택 (튜닝 기준)
 TUNE_METRIC = "RMSE";   % "RMSE" | "MAE"
 
 %% ── 경로 --------------------------------------------------------------
 matPath   = "G:\공유 드라이브\BSL_Data4\HNE_RPT_@50,70_251214_9\Driving\SIM_parsed\20degC\2RC_fitting_600s\2RC_results_600s.mat";
-save_path = "G:\공유 드라이브\BSL_Data4\HNE_RPT_@50,70_251214_9\Driving\SIM_parsed\ML_SVR";
+save_path = "G:\공유 드라이브\BSL_Data4\HNE_RPT_@50,70_251214_9\Driving\SIM_parsed\ML_SVR_C";
 if ~exist(save_path, 'dir'), mkdir(save_path); end
 
 %% ── load 파싱/검증 -----------------------------------------------------
@@ -116,7 +111,6 @@ fprintf('>> LOAD_TRAINVAL: %s\n', strjoin(load_trainval, ', '));
 S = load(matPath);
 getTblECM = @(loadName) localGetTblECM(S, loadName);
 
-% 실제 mat에 존재하는 load만 남기기
 load_use_ok = {};
 for i = 1:numel(load_use)
     try
@@ -154,12 +148,13 @@ nC = numel(cell_names);
 fprintf('>> 공통 셀 개수: %d\n', nC);
 
 %% ── X 구성: sample=(cell,load) -----------------------------------------
-pNames_2RC = {'R0','R1','R2','tau1','tau2'};
+% feature = [R0, R1, R2, C1, C2]
+feat_base_names = {'R0','R1','R2','C1','C2'};
 
 feat_names = {};
 for s = SOC_use(:).'
-    for pi = 1:numel(pNames_2RC)
-        feat_names{end+1} = sprintf('%s_%d', pNames_2RC{pi}, s); %#ok<AGROW>
+    for pi = 1:numel(feat_base_names)
+        feat_names{end+1} = sprintf('%s_%d', feat_base_names{pi}, s); %#ok<AGROW>
     end
 end
 nFeat = numel(feat_names);
@@ -185,19 +180,36 @@ for li = 1:nL_use
 
         col = 0;
         for s = SOC_use(:).'
-            for pi = 1:numel(pNames_2RC)
+            vn_R0   = sprintf('SOC%d_R0_mOhm', s);
+            vn_R1   = sprintf('SOC%d_R1_mOhm', s);
+            vn_R2   = sprintf('SOC%d_R2_mOhm', s);
+            vn_tau1 = sprintf('SOC%d_tau1', s);
+            vn_tau2 = sprintf('SOC%d_tau2', s);
+
+            if ismember(vn_R0, vnames),   R0v   = TblL{ci, vn_R0};   else, R0v   = NaN; end
+            if ismember(vn_R1, vnames),   R1v   = TblL{ci, vn_R1};   else, R1v   = NaN; end
+            if ismember(vn_R2, vnames),   R2v   = TblL{ci, vn_R2};   else, R2v   = NaN; end
+            if ismember(vn_tau1, vnames), tau1v = TblL{ci, vn_tau1}; else, tau1v = NaN; end
+            if ismember(vn_tau2, vnames), tau2v = TblL{ci, vn_tau2}; else, tau2v = NaN; end
+
+            % C1, C2 계산 (kF)
+            if isfinite(R1v) && R1v > 0 && isfinite(tau1v)
+                C1v = tau1v / R1v;
+            else
+                C1v = NaN;
+            end
+
+            if isfinite(R2v) && R2v > 0 && isfinite(tau2v)
+                C2v = tau2v / R2v;
+            else
+                C2v = NaN;
+            end
+
+            vals = [R0v, R1v, R2v, C1v, C2v];
+
+            for k = 1:numel(vals)
                 col = col + 1;
-                pname = pNames_2RC{pi};
-                if pi <= 3
-                    varName = sprintf('SOC%d_%s_mOhm', s, pname);
-                else
-                    varName = sprintf('SOC%d_%s', s, pname);
-                end
-                if ismember(varName, vnames)
-                    X(row, col) = TblL{ci, varName};
-                else
-                    X(row, col) = NaN;
-                end
+                X(row, col) = vals(k);
             end
         end
     end
@@ -207,21 +219,18 @@ base_valid_X = all(isfinite(X), 2);
 fprintf('[DATA] samples=%d (cells %d × loads %d), features=%d\n', nS, nC, nL_use, nFeat);
 
 %% ── 라벨 입력 (nC 기준) ------------------------------------------------
-% ====== 여기 네 값 그대로 ======
 QC2_user  = [56.14;55.93;52.55;50.52;52.13;48.53;56.34;55.15;39.89;55.63;55.57;56.86];
 QC40_user = [57.49;57.57;54.00;52.22;53.45;51.28;57.91;56.51;42.14;57.27;57.18;58.40];
 
-Rcharg_user = [2.17;1.90;3.50;2.82;2.88;3.38;2.10;1.93;6.41;2.00;2.01;2.09]; % (원본이 13개면 nC랑 맞춰!)
+Rcharg_user = [2.17;1.90;3.50;2.82;2.88;3.38;2.10;1.93;6.41;2.00;2.01;2.09];
 Rcharg_80_90_avg_user = nan(nC,1);
 R1s_user = nan(nC,1);
 
 DCIR1s_T20_user = nan(nC,1);
-% DCIR10s_T20_user = [1.60;1.41;2.33;1.88;2.06;1.93;1.35;1.53;3.55;0.82;1.52;1.47];
 DCIR10s_T20_user = [1.48;1.34;1.97;1.91;1.64;1.76;1.35;1.46;3.44;1.45;1.45;1.41];
 DCIRdelta_T20_user = nan(nC,1);
 
 Power_T20_user = [2089.79;2372.03;1427.37;1735.16;1603.14;1677.27;2476.97;2191.48;914.67;4067.20;2196.09;2278.82]/1000;
-% ===============================
 
 QC2_user              = ensureLength(QC2_user, nC);
 QC40_user             = ensureLength(QC40_user, nC);
@@ -239,7 +248,6 @@ DCIR10s_byT = struct('T20',DCIR10s_T20_user);
 DCIRd_byT   = struct('T20',DCIRdelta_T20_user);
 Power_byT   = struct('T20',Power_T20_user);
 
-% 셀 라벨을 (cell×load)로 확장
 expandY = @(y_cell) repmat(y_cell(:), nL_use, 1);
 
 target_values = containers.Map();
@@ -273,7 +281,6 @@ for t = TEMP_list
     target_values(sprintf('Power_T%d', t))             = expandY(pw);
 end
 
-% active 타겟 리스트
 target_active = {};
 if PRED_QC2,          target_active{end+1} = 'QC2';              end
 if PRED_QC40,         target_active{end+1} = 'QC40';             end
@@ -322,7 +329,6 @@ for tt = 1:numel(target_active)
         continue;
     end
 
-    % --- train/val에 포함된 load들로 fold 구성 ---
     cv_loads = unique(l_tv, 'stable');
     nL_tv = numel(cv_loads);
     if nL_tv < 2
@@ -332,7 +338,6 @@ for tt = 1:numel(target_active)
 
     K = min(K_FOLD, nL_tv);
 
-    % load -> fold 배정 (랜덤, 재현성 rng)
     rng(0);
     perm = randperm(nL_tv);
     fold_id_of_load = zeros(nL_tv,1);
@@ -340,9 +345,6 @@ for tt = 1:numel(target_active)
         fold_id_of_load(perm(i)) = mod(i-1, K) + 1;
     end
 
-    % -------------------------
-    % (1) Hyperparam 후보 생성
-    % -------------------------
     cand = [];
     if TUNE_MODE == "fixed"
         cand = struct('Kernel',{FIXED_KERNEL}, ...
@@ -354,9 +356,6 @@ for tt = 1:numel(target_active)
             RAND_C_RANGE_LOG10, RAND_EPS_RANGE_LOG10, RAND_KS_RANGE_LOG10, RAND_USE_AUTO_KERNELSCALE);
     end
 
-    % -------------------------
-    % (2) 후보별 LOAD-CV 평가
-    % -------------------------
     bestScore = inf;
     bestCand = cand(1);
     bestDetail = struct();
@@ -369,10 +368,7 @@ for tt = 1:numel(target_active)
             X_tv, y_tv, l_tv, cv_loads, fold_id_of_load, K, ...
             c0.Kernel, c0.C, c0.Epsilon, c0.KernelScale, SVR_STANDARDIZE, TUNE_METRIC, nFeat);
 
-        % score가 NaN이면 스킵
-        if ~isfinite(cvScore)
-            continue;
-        end
+        if ~isfinite(cvScore), continue; end
 
         if cvScore < bestScore - EARLYSTOP_MIN_IMPROVE
             bestScore = cvScore;
@@ -393,9 +389,6 @@ for tt = 1:numel(target_active)
     fprintf('  [BEST by LOAD-CV] Kernel=%s, C=%.4g, eps=%.4g, KS=%s, %s=%.4f\n', ...
         bestCand.Kernel, bestCand.C, bestCand.Epsilon, ks2str(bestCand.KernelScale), TUNE_METRIC, bestScore);
 
-    % -------------------------
-    % (3) Final 모델: train/val 전체로 재학습
-    % -------------------------
     mdl = fitrsvm(X_tv, y_tv, ...
         'KernelFunction', bestCand.Kernel, ...
         'Standardize', SVR_STANDARDIZE, ...
@@ -410,9 +403,6 @@ for tt = 1:numel(target_active)
     tv.MAE  = mean(abs(res_tv));
     tv.R2   = calcR2(y_tv, yhat_tv);
 
-    % -------------------------
-    % (4) Test 평가 (있으면)
-    % -------------------------
     te = struct('RMSE',nan,'MAE',nan,'R2',nan);
     yhat_te = [];
     res_te  = [];
@@ -428,16 +418,12 @@ for tt = 1:numel(target_active)
         fprintf('  [TEST] test 샘플 부족/없음 → 스킵\n');
     end
 
-    % -------------------------
-    % (5) 저장
-    % -------------------------
     results.(tname).best = bestCand;
     results.(tname).cv = bestDetail;
     results.(tname).trainval.metrics = tv;
     results.(tname).test.metrics = te;
 
     results.(tname).mdl = mdl;
-
     results.(tname).trainval.y_true = y_tv;
     results.(tname).trainval.y_pred = yhat_tv;
     results.(tname).trainval.load_id = l_tv;
@@ -446,27 +432,22 @@ for tt = 1:numel(target_active)
     results.(tname).test.y_pred = yhat_te;
     results.(tname).test.load_id = load_id(idx_test);
 
-    % ---- plot: Train/Val + Test in one figure ----
     fig_all = figure('Color','w','Name',sprintf('SVR_ALL_%s',tname));
     hold on; grid on;
 
-    % (1) train/val: True vs Pred
-    %   - 여기서 yhat_tv 는 "train/val 전체로 재학습한 모델"의 train/val 예측
     h_tv = scatter(y_tv, yhat_tv, 30, 'filled', ...
         'Marker', 'o', ...
-        'MarkerFaceColor', [0 0 0], ...   % train/val: black
+        'MarkerFaceColor', [0 0 0], ...
         'MarkerEdgeColor', [0 0 0]);
 
-    % (2) test: True vs Pred (있으면)
     h_te = [];
     if numel(yhat_te) >= 2
         h_te = scatter(y_te, yhat_te, 30, 'filled', ...
             'Marker', 'o', ...
-            'MarkerFaceColor', [0.85 0.1 0.1], ...  % test: red (색만 다르게)
+            'MarkerFaceColor', [0.85 0.1 0.1], ...
             'MarkerEdgeColor', [0.85 0.1 0.1]);
     end
 
-    % (3) 1:1 line and axes
     all_true = y_tv;
     all_pred = yhat_tv;
     if numel(yhat_te) >= 2
@@ -480,7 +461,6 @@ for tt = 1:numel(target_active)
     xlabel(sprintf('True %s', tname));
     ylabel(sprintf('Pred %s', tname));
 
-    % title에 train/test 성능 같이 표기 (원하면 포맷 바꿔도 됨)
     if numel(yhat_te) >= 2
         title(sprintf('%s | Train/Val: R2=%.3f RMSE=%.3f | Test: R2=%.3f RMSE=%.3f', ...
             tname, tv.R2, tv.RMSE, te.R2, te.RMSE));
@@ -492,32 +472,27 @@ for tt = 1:numel(target_active)
     axis equal;
     axis tight;
 
-    % legend
     if isempty(h_te)
         legend(h_tv, {'Train/Val'}, 'Location','best');
     else
         legend([h_tv h_te], {'Train/Val','Test'}, 'Location','best');
     end
 
-    % save
     exportgraphics(fig_all, fullfile(save_path, sprintf('SVR_ALL_%s.png', tname)), 'Resolution', 220);
     savefig(fig_all, fullfile(save_path, sprintf('SVR_ALL_%s.fig', tname)));
-
-
 end
 
 %% ── 저장 --------------------------------------------------------------
-save(fullfile(save_path, 'SVR_results_split_LOADCV.mat'), ...
-    'results', 'X', 'feat_names', 'cell_names', 'SOC_use', 'pNames_2RC', ...
+save(fullfile(save_path, 'SVR_results_split_LOADCV_Cfeat.mat'), ...
+    'results', 'X', 'feat_names', 'cell_names', 'SOC_use', ...
     'LOAD_USE_STR', 'LOAD_TEST_STR', 'LOAD_TRAINVAL_STR', 'K_FOLD', 'TEMP_list', ...
     'load_id', 'cell_id', 'load_use', 'load_trainval', 'load_test', ...
     'TUNE_MODE','RAND_N_TRIALS','RAND_KERNEL_SET','TUNE_METRIC', ...
     'SVR_STANDARDIZE','EARLYSTOP_ENABLE','EARLYSTOP_PATIENCE','EARLYSTOP_MIN_IMPROVE');
 
-disp('완료: SVR LOAD-split + LOAD-level CV + (random search 옵션) + TEST 평가 저장');
+disp('완료: SVR C1/C2 feature 버전 저장');
 
 %% ========================= helper functions ============================
-
 function loads = parseLoadList(str0)
     if isstring(str0), str0 = char(str0); end
     str0 = strtrim(str0);
@@ -586,7 +561,7 @@ function cand = makeRandomCandidates(N, kernelSet, logC, logEps, logKS, allowAut
                 KS = 10^(logKS(1) + (logKS(2)-logKS(1))*rand());
             end
         else
-            KS = 'auto'; % linear 등은 KS 의미 약해서 auto로 고정
+            KS = 'auto';
         end
 
         cand(i).Kernel = ker;
@@ -628,7 +603,6 @@ function [score, detail] = evalLoadCV_SVR(X, y, l, cv_loads, fold_id_of_load, K,
             fold_MAE(k)  = mean(abs(res));
             fold_R2(k)   = calcR2(y(is_val), yhat_k);
         catch
-            % 일부 조합이 수렴/에러 나면 fold 스킵
             continue;
         end
     end
