@@ -1,32 +1,27 @@
 % ======================================================================
-% Synthetic_DRT_SOH_Dataset_DRTLabel_CellRef.m
+% Synthetic_DRT_SOH_SaveCSV_NoFitting.m
 % ----------------------------------------------------------------------
 % Purpose
 %   1) Generate aging-dependent synthetic DRT parameters by degradation
 %      index k in [0, 1].
 %   2) Convert DRT to nRC truth, simulate voltage under driving profiles.
 %   3) Add Markov noise to make synthetic voltage data.
-%   4) Fit each synthetic voltage with a 2RC ECM.
-%   5) Generate SOH dummy label from the DRT-generated TRUE ECM state,
-%      not from the fitted ECM parameters.
+%   4) Save each synthetic voltage data as a CSV file.
+%
 %
 % Concept
-%   - Label source: latent DRT / true ECM generated before voltage/noise/fit.
-%   - ML/DL input: fitted 2RC ECM parameters from noisy synthetic voltage.
-%   - This avoids leakage where the target SOH is a deterministic function of
-%     the same fitted ECM parameters used as model input.
+%   - Synthetic CSV output contains only time, current, and synthetic voltage.
+%   - No 2RC fitting is performed in this version.
 %
 % Required helper files in the same folder/path
 %   - DRT_mu_sigma.m
 %   - DRT_Rtau.m
-%   - RC_model_2.m
 %   - MarkovNoise_idx.m
 %
 % Notes
-%   - cfg.fresh and cfg.aged are automatically generated from the fitted
-%     ECM parameters of the largest-capacity and smallest-capacity cells.
-%   - SOH labels are synthetic/dummy labels for ML/DL data generation, not
-%     directly measured SOH unless cfg.SOH_aged is assigned from measurement.
+%   - cfg.fresh and cfg.aged are generated from existing fitted-cell reference
+%     data only to define the synthetic aging trajectory.
+%   - This script does not fit generated synthetic voltage data.
 % ======================================================================
 
 clear; clc; close all;
@@ -34,17 +29,21 @@ clear; clc; close all;
 %% ------------------------ User configuration -------------------------
 cfg = struct();
 
-% Output
-cfg.out_dir = 'G:\공유 드라이브\Battery Software Group (2025)\Members\김주은\PINN\합성데이터';
-if ~exist(cfg.out_dir, 'dir'); mkdir(cfg.out_dir); end
+% Synthetic voltage CSV output.
+% One CSV is saved per generated cell and driving-load pair.
+% File name format: CellID_LoadID.csv, e.g., 001_01.csv.
+% Columns: time, current, voltage.
+cfg.synthetic_csv_dir = 'G:\공유 드라이브\BSG_SYN';
+cfg.save_synthetic_voltage_csv = true;
+if cfg.save_synthetic_voltage_csv && ~exist(cfg.synthetic_csv_dir, 'dir')
+    mkdir(cfg.synthetic_csv_dir);
+end
 
 % Synthetic sample count. Each sample has an independent k value.
 cfg.nSyntheticSamples = 100;
 
 % Random seed configuration
-% soh    : base seed for SOH Gaussian noise, applied per DRT sample.
 % markov : base seed for Markov voltage noise, applied per final voltage sample.
-cfg.seed.soh    = 1;
 cfg.seed.markov = 1;
 
 % nRC DRT discretization
@@ -80,9 +79,6 @@ cfg.reference.true_ecm_csv = fullfile(pwd, 'True_ECM_Labels.csv');
 %   numeric : use one SOC only, e.g., 70.
 cfg.reference.soc_for_reference = 70;
 
-% If true, SOH label is clipped to [SOH_aged, 100] instead of a fixed [70,100].
-cfg.reference.clip_to_real_reference_range = true;
-
 % Driving profiles folder.
 % Each file must have column 1 = time [s], column 2 = current [A].
 cfg.driving_folder = 'G:\공유 드라이브\Battery Software Group (2025)\Protocols\2026 Driving_Loads_20\after_scaling';
@@ -101,26 +97,8 @@ cfg.noise.nSeeds = 1;                % seed 1..nSeeds. Seed 0 = non-noise.
 
 cfg.noise.includeNonNoise = false; % True: non-noise 생성
 
-% 2RC fitting options
-cfg.fit.useParallel = true;
-cfg.fit.nStartPoints = 40;
-cfg.fit.para0 = [0.0012; 0.0008; 0.0012; 6; 70];
-cfg.fit.lb    = [0; 0; 0; 0.001; 0.001];
-cfg.fit.ub    = [0.05; 0.03; 0.03; 500; 2000];
-
-% SOH dummy label configuration.
-% These weights are now applied to DRT-generated TRUE ECM features,
-% not fitted ECM features.
-cfg.soh.weights = [0.35 0.30 0.15 0.10 0.10];
-cfg.soh.noise_sigma = 1.0;            % epsilon ~ N(0, 1)
-cfg.soh.clip_range = [70 100];
-
-% k-based optional shape. Use 1 for no direct k nonlinearity.
-% If cfg.soh.use_k_base = true, SOH uses k^gamma as the main trend and
-% DRT score is saved for diagnostics. Default below uses only DRT true ECM
-% score so the label is explicitly DRT-derived.
-cfg.soh.use_k_base = false;
-cfg.soh.k_gamma = 1.0;
+% 2RC fitting is intentionally disabled in this CSV-export version.
+% The script stops at synthetic voltage generation and CSV saving.
 
 %% ------------------------ Initialization -----------------------------
 
@@ -142,10 +120,6 @@ end
 [cfg.fresh, cfg.aged, cfg.SOH_aged, cfg.reference_info] = ...
     loadFreshAgedDRTReferencesFromFitting(cfg);
 
-if cfg.reference.clip_to_real_reference_range
-    cfg.soh.clip_range = [cfg.SOH_aged 100];
-end
-
 % Collect driving profile files from the folder.
 cfg.driving_files = collectDrivingFilesFromFolder( ...
     cfg.driving_folder, cfg.driving_exts);
@@ -159,62 +133,22 @@ for ii = 1:numel(cfg.driving_files)
     fprintf('  [%02d] %s\n', ii, cfg.driving_files{ii});
 end
 
-ms = MultiStart('UseParallel', cfg.fit.useParallel, 'Display', 'off');
-opt = optimset('display','off', 'MaxIter', 1e3, 'MaxFunEvals', 1e4, ...
-               'TolFun', eps, 'TolX', eps);
-startPts = CustomStartPointSet(makeStartPoints_LogTau(cfg.fit.nStartPoints, ...
-                                                       cfg.fit.lb, cfg.fit.ub, ...
-                                                       cfg.fit.para0));
-
-% tau1 < tau2 constraint: [0 0 0 1 -1] * p <= 0
-A_lin = [0 0 0 1 -1];
-b_lin = 0;
-
-% DRT-generated TRUE ECM references.
-% For bimodal DRT, true ECM is [R0, R_mode1, R_mode2, tau_mode1, tau_mode2].
-cfg.trueECM.fresh = drtParam_to_trueECM_2RC(cfg.fresh);
-cfg.trueECM.aged  = drtParam_to_trueECM_2RC(cfg.aged);
-
-S_aged = soh_score(cfg.trueECM.aged, cfg.trueECM.fresh, cfg.soh.weights);
-if S_aged <= 0 || ~isfinite(S_aged)
-    error('S_aged must be positive and finite. Check fresh/aged DRT true ECM references.');
-end
-cfg.soh.A = (100 - cfg.SOH_aged) / S_aged;
-
 % Generate uniformly spaced degradation indices without exact endpoints.
 % k = 0 and k = 1 are used only as fresh/aged anchors.
 kList = ((1:cfg.nSyntheticSamples).' - 0.5) / cfg.nSyntheticSamples;
 
 %% ------------------------ Main generation loop -----------------------
-rows = {};
-rowCounter = 0;
+savedCsvCount = 0;
 
 for sampleIdx = 1:cfg.nSyntheticSamples
     k = kList(sampleIdx);
     drtParam = interpolate_DRT_param(cfg.fresh, cfg.aged, k);
 
-    % DRT-generated TRUE ECM for label. This is calculated before voltage,
-    % noise, and fitting. It is the latent state used to assign SOH.
-    trueECM = drtParam_to_trueECM_2RC(drtParam);
-
-    % SOH Gaussian noise is assigned once per DRT sample.
-    % Example: nDRT = 50 -> sohSeed = cfg.seed.soh ... cfg.seed.soh+49.
-    sohSeed = cfg.seed.soh + sampleIdx - 1;
-    rng(sohSeed, 'twister');
-    sohEps = cfg.soh.noise_sigma * randn();
-
-    [SOH_DRT, DRT_score, drtFeatureVec] = soh_label_from_true_drt_ecm( ...
-        trueECM, cfg.trueECM.fresh, cfg.soh.weights, cfg.soh.A, ...
-        sohEps, cfg.soh.clip_range, k, cfg.SOH_aged, ...
-        cfg.soh.use_k_base, cfg.soh.k_gamma);
-
     % nRC truth from aging-dependent DRT for voltage generation.
-    [X_true, drtMeta] = make_nRC_from_DRT(drtParam, cfg.sigma10, cfg.nRC, cfg.tau_min, cfg.tau_max);
+    [X_true, ~] = make_nRC_from_DRT(drtParam, cfg.sigma10, cfg.nRC, cfg.tau_min, cfg.tau_max);
 
     for fileIdx = 1:numel(cfg.driving_files)
         [t_vec, I_vec, base_name] = readDrivingProfile(cfg.driving_files{fileIdx}, fileIdx);
-        OCV = zeros(size(t_vec));
-
         V_true = RC_model_n(X_true, t_vec, I_vec, cfg.nRC);
 
         % Seed 0 means no noise; seeds 1..nSeeds use Markov noise.
@@ -224,39 +158,36 @@ for sampleIdx = 1:cfg.nSyntheticSamples
             seedList = 1:cfg.noise.nSeeds;
         end
 
-        for seed = seedList
-            markovSeed = NaN;
+        if cfg.save_synthetic_voltage_csv && numel(seedList) ~= 1
+            error(['cfg.save_synthetic_voltage_csv uses CellID_LoadID.csv file names, ', ...
+                   'so exactly one voltage version per cell-load pair is required. ', ...
+                   'Set cfg.noise.nSeeds = 1 and cfg.noise.includeNonNoise = false, ', ...
+                   'or extend the file name to include seed information.']);
+        end
 
+        for seed = seedList
             if seed == 0
                 V_syn = V_true;
-                seedName = 'Non_noise';
             else
                 % Markov noise is assigned once per final voltage sample.
                 % Example: nDRT = 50, nLoad = 20, nSeeds = 1
                 %          -> markovSeed = cfg.seed.markov ... cfg.seed.markov+999.
                 linearVoltageIdx = ((sampleIdx - 1) * numel(cfg.driving_files) + (fileIdx - 1)) ...
                     * cfg.noise.nSeeds + seed;
-                markovSeed = cfg.seed.markov + linearVoltageIdx - 1;
-
-                rng(markovSeed, 'twister');
+                rng(cfg.seed.markov + linearVoltageIdx - 1, 'twister');
                 V_syn = MarkovNoise_idx(V_true, cfg.noise.epsilon_percent_span, ...
                     cfg.noise.initial_state, cfg.noise.sigma);
-                seedName = sprintf('V_SD%d', seed);
             end
 
-            [bestP, rmse, exitflag, iter] = fit2RC_full(V_syn, t_vec, I_vec, OCV, ...
-                cfg, ms, startPts, opt, A_lin, b_lin);
-
-            rowCounter = rowCounter + 1;
-            rows(rowCounter,:) = { ...
-                sampleIdx, k, fileIdx, base_name, seed, seedName, sohSeed, markovSeed, ...
-                drtParam.R0, drtParam.A_tot, drtParam.w(1), drtParam.w(2), ...
-                drtParam.tau_mode(1), drtParam.tau_mode(2), ...
-                trueECM(1), trueECM(2), trueECM(3), trueECM(4), trueECM(5), ...
-                bestP(1), bestP(2), bestP(3), bestP(4), bestP(5), ...
-                rmse, exitflag, iter, SOH_DRT, DRT_score, ...
-                drtFeatureVec(1), drtFeatureVec(2), drtFeatureVec(3), drtFeatureVec(4), drtFeatureVec(5), ...
-                sum(drtMeta.R), max(drtMeta.g_tau)};
+            if cfg.save_synthetic_voltage_csv
+                cellID = sprintf('%03d', sampleIdx);
+                loadID = parseDrivingLoadID(base_name, fileIdx);
+                synFileName = sprintf('%s_%s.csv', cellID, loadID);
+                SynVoltageTable = table(t_vec(:), I_vec(:), V_syn(:), ...
+                    'VariableNames', {'time','current','voltage'});
+                writetable(SynVoltageTable, fullfile(cfg.synthetic_csv_dir, synFileName));
+                savedCsvCount = savedCsvCount + 1;
+            end
         end
     end
 
@@ -265,22 +196,8 @@ for sampleIdx = 1:cfg.nSyntheticSamples
     end
 end
 
-varNames = {'sample_id','k','load_id','load_name','seed','seed_name','soh_seed','markov_seed', ...
-            'true_R0','true_A_tot','true_w1','true_w2','true_tau_mode1','true_tau_mode2', ...
-            'trueECM_R0','trueECM_R1','trueECM_R2','trueECM_tau1','trueECM_tau2', ...
-            'R0_hat','R1_hat','R2_hat','tau1_hat','tau2_hat', ...
-            'RMSE','exitflag','iterations','SOH_DRT','DRT_score', ...
-            'z1_true_R0','z2_true_Rsum','z3_true_tau_ratio','z4_true_tau_max','z5_true_Rsplit', ...
-            'DRT_sumR','DRT_g_tau_max'};
-
-Dataset = cell2table(rows, 'VariableNames', varNames);
-
-save(fullfile(cfg.out_dir, 'Synthetic_DRT_SOH_Dataset_DRTLabel_CellRef.mat'), 'Dataset', 'cfg');
-writetable(Dataset, fullfile(cfg.out_dir, 'Synthetic_DRT_SOH_Dataset_DRTLabel_CellRef.csv'));
-
-fprintf('\nDone. Rows = %d\n', height(Dataset));
-fprintf('Saved MAT: %s\n', fullfile(cfg.out_dir, 'Synthetic_DRT_SOH_Dataset_DRTLabel_CellRef.mat'));
-fprintf('Saved CSV: %s\n', fullfile(cfg.out_dir, 'Synthetic_DRT_SOH_Dataset_DRTLabel_CellRef.csv'));
+fprintf('\nDone. Saved synthetic CSV files = %d\n', savedCsvCount);
+fprintf('Output folder: %s\n', cfg.synthetic_csv_dir);
 
 %% =====================================================================
 % Local functions
@@ -530,25 +447,6 @@ function p = interpolate_DRT_param(fresh, aged, k)
     p.tau_mode = 10.^logTau;
 end
 
-function pTrue = drtParam_to_trueECM_2RC(param)
-    % Converts bimodal DRT generator parameters into the latent TRUE 2RC ECM.
-    % R_mode_i is the area of the i-th DRT mode: A_tot * w_i / sum(w).
-    % tau_i is the DRT mode location. This true ECM is used only for labels
-    % and diagnostics; ML/DL inputs should still use fitted ECM parameters.
-    w = param.w(:);
-    tau = param.tau_mode(:);
-    if numel(w) ~= 2 || numel(tau) ~= 2
-        error('drtParam_to_trueECM_2RC currently assumes bimodal DRT with two modes.');
-    end
-    if any(w < 0) || sum(w) <= 0
-        error('DRT mode weights must be nonnegative and have positive sum.');
-    end
-    R_modes = param.A_tot * w / sum(w);
-    [tauSorted, idx] = sort(tau, 'ascend');
-    R_sorted = R_modes(idx);
-    pTrue = [param.R0; R_sorted(:); tauSorted(:)];
-end
-
 function [X, meta] = make_nRC_from_DRT(param, sigma10, nRC, tau_min, tau_max)
     [mu10, ~, ~, ~, ~, ~, ~] = DRT_mu_sigma(param.tau_mode, sigma10);
     [theta, r_mode, r_theta, dth, R, tau, g_tau, A_modes, w_used] = ...
@@ -557,6 +455,28 @@ function [X, meta] = make_nRC_from_DRT(param, sigma10, nRC, tau_min, tau_max)
     meta = struct('theta', theta, 'r_mode', r_mode, 'r_theta', r_theta, ...
                   'dth', dth, 'R', R, 'tau', tau, 'g_tau', g_tau, ...
                   'A_modes', A_modes, 'w_used', w_used);
+end
+
+
+function loadID = parseDrivingLoadID(base_name, fileIdx)
+    % Use the leading number in the driving-load file name as load ID.
+    % Examples: '01_...' -> '01', '20_...' -> '20'.
+    tok = regexp(char(base_name), '^(\d+)', 'tokens', 'once');
+
+    if isempty(tok)
+        warning('Could not parse leading load ID from %s. Falling back to file index %02d.', ...
+            char(base_name), fileIdx);
+        loadID = sprintf('%02d', fileIdx);
+    else
+        loadNum = str2double(tok{1});
+        if isnan(loadNum)
+            warning('Could not convert leading load ID from %s. Falling back to file index %02d.', ...
+                char(base_name), fileIdx);
+            loadID = sprintf('%02d', fileIdx);
+        else
+            loadID = sprintf('%02d', loadNum);
+        end
+    end
 end
 
 function [t_vec, I_vec, base_name] = readDrivingProfile(item, fileIdx)
@@ -591,95 +511,6 @@ function [t_vec, I_vec, base_name] = readDrivingProfile(item, fileIdx)
     if any(diff(t_vec) <= 0)
         error('Time vector must be strictly increasing in %s.', base_name);
     end
-end
-
-function X0 = makeStartPoints_LogTau(nStart, lb, ub, para0)
-    X0 = zeros(nStart, numel(para0));
-    for ii = 1:nStart
-        R0 = lb(1) + rand()*(ub(1)-lb(1));
-        R1 = lb(2) + rand()*(ub(2)-lb(2));
-        R2 = lb(3) + rand()*(ub(3)-lb(3));
-        tauA = 10^(log10(lb(4)) + rand()*(log10(ub(4))-log10(lb(4))));
-        tauB = 10^(log10(lb(5)) + rand()*(log10(ub(5))-log10(lb(5))));
-        tauPair = sort([tauA tauB]);
-        X0(ii,:) = [R0 R1 R2 tauPair(1) tauPair(2)];
-    end
-    X0 = [para0(:).'; X0];
-end
-
-function [bestP, bestFval, eflg, iter] = fit2RC_full(V, t, I, OCV, cfg, ms, startPts, opt, A_lin, b_lin)
-    problem = createOptimProblem('fmincon', ...
-        'objective', @(p)RMSE_2RC_local(V, p, t, I, OCV), ...
-        'x0', cfg.fit.para0, 'lb', cfg.fit.lb, 'ub', cfg.fit.ub, ...
-        'Aineq', A_lin, 'bineq', b_lin, 'options', opt);
-
-    [bestP, bestFval, eflg, ~, sltns] = run(ms, problem, startPts);
-    if isempty(sltns)
-        iter = NaN;
-    else
-        idx = find([sltns.Fval] == bestFval, 1);
-        iter = sltns(idx).Output.iterations;
-    end
-    bestP = bestP(:);
-end
-
-function cost = RMSE_2RC_local(data, para, t, I, OCV)
-    model = RC_model_2(para, t, I, OCV);
-    cost = sqrt(mean((data(:) - model(:)).^2));
-end
-
-function [SOH, scoreVal, z] = soh_label_from_true_drt_ecm(pTrue, pFreshTrue, weights, A, sohEps, clipRange, k, SOH_aged, useKBase, kGamma)
-    % Main/default mode: SOH is generated from DRT true ECM score.
-    % Optional mode: SOH follows k^gamma directly, while DRT score remains
-    % saved as a diagnostic. Keep useKBase=false when you want the label to
-    % come from DRT/true ECM features.
-    scoreVal = soh_score(pTrue, pFreshTrue, weights);
-    z = soh_features(pTrue, pFreshTrue);
-
-    if useKBase
-        SOH_raw = 100 - (100 - SOH_aged) * (k ^ kGamma) + sohEps;
-    else
-        SOH_raw = 100 - A * scoreVal + sohEps;
-    end
-
-    SOH = min(clipRange(2), max(clipRange(1), SOH_raw));
-end
-
-function scoreVal = soh_score(pHat, pFresh, weights)
-    z = soh_features(pHat, pFresh);
-    scoreVal = sum(weights(:).' .* z(:).');
-end
-
-function z = soh_features(pHat, pFresh)
-    tiny = eps;
-    R0h = max(pHat(1), tiny); R1h = max(pHat(2), tiny); R2h = max(pHat(3), tiny);
-    t1h = max(pHat(4), tiny); t2h = max(pHat(5), tiny);
-    R0f = max(pFresh(1), tiny); R1f = max(pFresh(2), tiny); R2f = max(pFresh(3), tiny);
-    t1f = max(pFresh(4), tiny); t2f = max(pFresh(5), tiny);
-
-    % z1: true ohmic resistance increase from DRT aging state
-    z1 = max(0, log(R0h / R0f));
-
-    % z2: true polarization resistance increase, i.e., DRT total area increase
-    z2 = max(0, log((R1h + R2h) / (R1f + R2f)));
-
-    % z3: true DRT mode separation/shape change
-    z3 = max(0, log((t2h / t1h) / (t2f / t1f)));
-
-    % z4: true slow time-constant increase
-    z4 = max(0, log(max(t1h, t2h) / max(t1f, t2f)));
-
-    % z5: true DRT branch/mode resistance redistribution penalty.
-    % Penalizes only when a mode resistance deviates by more than 2x.
-    rDev1 = abs(log(R1h / R1f));
-    rDev2 = abs(log(R2h / R2f));
-    z5 = softplus(max(rDev1, rDev2) - log(2));
-
-    z = [z1 z2 z3 z4 z5];
-end
-
-function y = softplus(x)
-    y = log1p(exp(-abs(x))) + max(x, 0);
 end
 
 function files = collectDrivingFilesFromFolder(folderPath, exts)

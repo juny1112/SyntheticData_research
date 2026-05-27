@@ -111,7 +111,7 @@ cfg.fit.ub    = [0.05; 0.03; 0.03; 500; 2000];
 % SOH dummy label configuration.
 % These weights are now applied to DRT-generated TRUE ECM features,
 % not fitted ECM features.
-cfg.soh.weights = [0.35 0.30 0.15 0.10 0.10];
+cfg.soh.weights = [0.30 0.25 0.20 0.15 0.10];
 cfg.soh.noise_sigma = 1.0;            % epsilon ~ N(0, 1)
 cfg.soh.clip_range = [70 100];
 
@@ -225,6 +225,8 @@ for sampleIdx = 1:cfg.nSyntheticSamples
         end
 
         for seed = seedList
+            markovSeed = NaN;
+
             if seed == 0
                 V_syn = V_true;
                 seedName = 'Non_noise';
@@ -233,7 +235,7 @@ for sampleIdx = 1:cfg.nSyntheticSamples
                 % Example: nDRT = 50, nLoad = 20, nSeeds = 1
                 %          -> markovSeed = cfg.seed.markov ... cfg.seed.markov+999.
                 linearVoltageIdx = ((sampleIdx - 1) * numel(cfg.driving_files) + (fileIdx - 1)) ...
-                                   * cfg.noise.nSeeds + seed;
+                    * cfg.noise.nSeeds + seed;
                 markovSeed = cfg.seed.markov + linearVoltageIdx - 1;
 
                 rng(markovSeed, 'twister');
