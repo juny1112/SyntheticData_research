@@ -36,7 +36,7 @@ for fileIdx = 1:numel(driving_files)
     numSeeds = 10;
 
     V_SD_cell = cell(numSeeds,1);
-    for s = 1:numSeeds
+    for s = 10 %1:numSeeds
         rng(s);
         [noisy,~,~,~,~,~] = MarkovNoise_idx(V_est, epsilon_percent_span, initial_state, sigma);
         V_SD_cell{s} = noisy(:);   % ★ 필수

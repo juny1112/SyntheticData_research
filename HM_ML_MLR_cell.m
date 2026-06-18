@@ -23,6 +23,10 @@
 % ======================================================================
 clear; clc; close all;
 
+% Reproducibility for random search and cell-level CV fold generation
+RANDOM_SEED = 42;
+rng(RANDOM_SEED);
+
 %% ── 설정(토글) ---------------------------------------------------------
 SOC_use = [70];                 % 예: [70] 또는 [70 50]
 TEMP_list = [20];               % 온도별 타겟 키 생성용
@@ -40,7 +44,7 @@ K_FOLD = 5;
 % ── 타겟(출력 label) 활성화 토글(기본 스칼라) ---------------------------
 PRED_QC2         = true;
 PRED_QC40        = true;
-PRED_RCHARG      = false;
+PRED_RCHARG      = true;
 PRED_RCHARG_8090 = false;
 PRED_R1S         = false;
 
@@ -48,12 +52,12 @@ PRED_R1S         = false;
 PRED_DCIR1S_BYTEMP  = false;
 PRED_DCIR10S_BYTEMP = true;
 PRED_DDELTA_BYTEMP  = false;
-PRED_POWER_BYTEMP   = true;
+PRED_POWER_BYTEMP   = false;
 
 %% ── 경로/파일 ----------------------------------------------------------
 matPath   = "G:\공유 드라이브\BSL_Data4\HNE_RPT_@50,70_251214_9\Driving\SIM_parsed\20degC\2RC_fitting_600s\2RC_results_600s.mat";
 
-save_path = "G:\공유 드라이브\BSL_Data4\HNE_RPT_@50,70_251214_9\Driving\SIM_parsed\ML_MLR_cellSplit";
+save_path = "C:\Users\junny\OneDrive\바탕 화면\이범식_머신러닝\term_project\MLR_results";
 if ~exist(save_path, 'dir'), mkdir(save_path); end
 
 %% ── 주행부하 파싱/검증 -------------------------------------------------
@@ -177,7 +181,6 @@ Rcharg_user = [2.17
 6.41
 2.00
 2.01
-8.56
 2.09];
 
 Rcharg_80_90_avg_user = nan(nC,1);
@@ -320,7 +323,7 @@ for tt = 1:numel(target_active)
 
     K = min(K_FOLD, nC_tv);
 
-    rng(0);
+    % RANDOM_SEED is fixed once at the top of the script.
     perm = randperm(nC_tv);
     fold_id_of_cell = zeros(nC_tv,1);
     for i = 1:nC_tv
@@ -480,11 +483,36 @@ for tt = 1:numel(target_active)
     writetable(coef_tbl, fullfile(save_path, sprintf('MLR_coeffs_FINAL_%s.csv', tname)), 'WriteRowNames', true);
 end
 
+
+%% ── Summary table for report/result analysis --------------------------
+target_names = fieldnames(results);
+Model = strings(0,1); Target = strings(0,1); Hyperparameters = strings(0,1);
+Train_RMSE = []; CV_RMSE = []; Test_RMSE = [];
+Train_R2 = []; CV_R2 = []; Test_R2 = [];
+N_TrainVal = []; N_Test = [];
+for ii = 1:numel(target_names)
+    tname = target_names{ii};
+    rr = results.(tname);
+    Model(end+1,1) = "MLR";
+    Target(end+1,1) = string(tname);
+    Hyperparameters(end+1,1) = "none";
+    Train_RMSE(end+1,1) = rr.trainval.RMSE;
+    CV_RMSE(end+1,1) = rr.cv.RMSE_mean;
+    Test_RMSE(end+1,1) = rr.test.metrics.RMSE;
+    Train_R2(end+1,1) = rr.trainval.R2;
+    CV_R2(end+1,1) = rr.cv.R2_mean;
+    Test_R2(end+1,1) = rr.test.metrics.R2;
+    N_TrainVal(end+1,1) = numel(rr.trainval.y_true);
+    N_Test(end+1,1) = numel(rr.test.y_true);
+end
+summary_tbl = table(Model, Target, Hyperparameters, Train_RMSE, CV_RMSE, Test_RMSE, Train_R2, CV_R2, Test_R2, N_TrainVal, N_Test);
+writetable(summary_tbl, fullfile(save_path, 'MLR_summary_RMSE.csv'));
+
 %% ── 저장 ---------------------------------------------------------------
 save(fullfile(save_path, 'MLR_results_cellSplit_CV.mat'), ...
     'results', 'X', 'feat2RC_names', 'cell_names', 'SOC_use', 'pNames_2RC', ...
     'LOAD_FEAT_STR', 'TEST_CELL_ID_STR', 'K_FOLD', 'TEMP_list', ...
-    'load_id', 'cell_id', 'load_feat');
+    'load_id', 'cell_id', 'load_feat', 'RANDOM_SEED', 'summary_tbl');
 
 disp('완료: CELL split + CELL-level K-fold CV + test 평가 결과 저장.');
 

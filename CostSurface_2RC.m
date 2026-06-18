@@ -3,8 +3,8 @@ clear; clc; close all;
 % Driving data 목록 정의
 driving_files = {
     %'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\udds_unit_time_scaled_current.xlsx',
-    %'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\us06_unit_time_scaled_current.xlsx',
-    'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_CITY1_time_scaled_current.xlsx',
+    'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\us06_unit_time_scaled_current.xlsx',
+    % G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_CITY1_time_scaled_current.xlsx',
     %'G:\공유 드라이브\Battery Software Lab\Protocols\Driving Load\55.6Ah_NE (분리열화실험)\BSL_HW1_time_scaled_current.xlsx'
 };
 
@@ -24,7 +24,7 @@ for fileIdx = 1:length(driving_files)
 
     % Markov Noise 생성 파라미터
     original            = V_est;
-    epsilon_percent_span = 5;     % ±[%]
+    epsilon_percent_span = 2;     % ±[%]
     initial_state       = 51;     
     sigma               = 0.005;  
     numseeds            = 10;     % 시드 개수

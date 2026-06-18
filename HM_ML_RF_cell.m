@@ -1,13 +1,12 @@
 %% ======================================================================
-%  SVR: 2RC(Tbl_Load_ECM) + labels
+%  RF: 2RC(Tbl_Load_ECM) + labels
 %   - Cell-based split + Cell-level K-fold CV
 %   - Feature load 선택(LOAD_FEAT_STR)
 %   - Test cell ID 수동 지정(TEST_CELL_ID_STR)
-%   - Random search 튜닝도 cell-level CV로 평가
+%   - Random search 튜닝을 cell-level CV로 평가
+%   - 성능 평가는 RMSE만 사용
 %
-%  [CV RESULT]  ★요청 반영★
-%   - CV metric은 "mean-fold"만 사용 (pooled 사용 안 함)
-%     => fold_RMSE/MAE/R2를 계산하고 mean(...,'omitnan')으로 요약
+%  Based on: HM_ML_SVR_cell.m
 % ======================================================================
 clear; clc; close all;
 
@@ -25,9 +24,9 @@ SOC_use   = [70];
 TEMP_list = [20];
 
 % feature에 사용할 주행부하만 선택
-LOAD_FEAT_STR = "US06";       % 예: "US06" 또는 "US06 UDDS WLTP"
+LOAD_FEAT_STR = "US06";       % 대표 주행부하 1종 사용
 
-% (중요) test 셀은 ID로 직접 지정
+% test 셀은 ID로 직접 지정
 TEST_CELL_ID_STR = "02 04";
 
 % CV fold (cell 기준)
@@ -45,35 +44,28 @@ PRED_DCIR10S_BYTEMP = true;
 PRED_DDELTA_BYTEMP  = false;
 PRED_POWER_BYTEMP   = false;
 
-% ---- SVR 기본/튜닝 ----
-SVR_STANDARDIZE = true;
-
-% 튜닝 모드
+% ---- RF 튜닝 설정 ----
+% TreeBagger 기반 Random Forest regression
 TUNE_MODE = "random";     % "fixed" | "random"
-FIXED_KERNEL      = 'gaussian';
-FIXED_C           = 10;
-FIXED_EPSILON     = 0.05;
-FIXED_KERNELSCALE = 'auto';
 
-% Random search 설정
-RAND_N_TRIALS = 500;
-RAND_KERNEL_SET = {'linear', 'gaussian'};   % 필요시 {'gaussian','linear'}
-RAND_C_RANGE_LOG10        = [-3, 1];
-RAND_EPS_RANGE_LOG10      = [-4, 0];
-RAND_KS_RANGE_LOG10       = [-3, 2];
-RAND_USE_AUTO_KERNELSCALE = true;
+% fixed mode
+FIXED_NUM_TREES = 200;
+FIXED_MIN_LEAF  = 1;
+FIXED_NUM_PREDICTORS_TO_SAMPLE = "all";  % "all" 또는 정수
 
-% Random search early stopping
-EARLYSTOP_ENABLE      = false;
-EARLYSTOP_PATIENCE    = 15;
-EARLYSTOP_MIN_IMPROVE = 1e-4;
+% random search mode
+RAND_N_TRIALS = 200;
+RAND_NUM_TREES_SET = [50 100 200 300 500];
+RAND_MIN_LEAF_SET  = [1 2 3 5];
+% feature가 5개일 때 후보: 1,2,3,5,all
+RAND_NUM_PRED_SET  = ["1","2","3","5","all"];
 
-% 튜닝 기준 지표 (mean-fold 기준)
-TUNE_METRIC = "RMSE";   % "RMSE" | "MAE"
+% 튜닝 기준: mean-fold RMSE
+TUNE_METRIC = "RMSE";
 
 %% ── 경로 --------------------------------------------------------------
 matPath   = "G:\공유 드라이브\BSL_Data4\HNE_RPT_@50,70_251214_9\Driving\SIM_parsed\20degC\2RC_fitting_600s\2RC_results_600s.mat";
-save_path = "C:\Users\junny\OneDrive\바탕 화면\이범식_머신러닝\term_project\SVR_results";
+save_path = "C:\Users\junny\OneDrive\바탕 화면\이범식_머신러닝\term_project\RF_results";
 if ~exist(save_path, 'dir'), mkdir(save_path); end
 
 %% ── load 파싱/검증 -----------------------------------------------------
@@ -277,7 +269,7 @@ idx_test_base     = base_valid_X & is_test_cell_smp;
 
 fprintf('[SPLIT] train/val base samples=%d, test base samples=%d\n', nnz(idx_trainval_base), nnz(idx_test_base));
 
-%% ── 타겟별: (튜닝 포함) CELL-CV(mean-fold) + FINAL + TEST --------------
+%% ── 타겟별: RF CELL-CV(mean-fold) + FINAL + TEST -----------------------
 results = struct();
 
 for tt = 1:numel(target_active)
@@ -296,7 +288,7 @@ for tt = 1:numel(target_active)
 
     fprintf('\n[TARGET %s] train/val=%d, test=%d\n', tname, size(X_tv,1), size(X_te,1));
 
-    if size(X_tv,1) < nFeat + 1
+    if size(X_tv,1) < 2
         warning('  train/val 샘플 부족 → skip');
         continue;
     end
@@ -319,80 +311,61 @@ for tt = 1:numel(target_active)
 
     % (1) 후보 생성
     if TUNE_MODE == "fixed"
-        cand = struct('Kernel',{FIXED_KERNEL}, ...
-                      'C',FIXED_C, ...
-                      'Epsilon',FIXED_EPSILON, ...
-                      'KernelScale',{FIXED_KERNELSCALE});
+        cand = struct('NumTrees', FIXED_NUM_TREES, ...
+                      'MinLeafSize', FIXED_MIN_LEAF, ...
+                      'NumPredictorsToSample', FIXED_NUM_PREDICTORS_TO_SAMPLE);
     else
-        cand = makeRandomCandidates(RAND_N_TRIALS, RAND_KERNEL_SET, ...
-            RAND_C_RANGE_LOG10, RAND_EPS_RANGE_LOG10, RAND_KS_RANGE_LOG10, RAND_USE_AUTO_KERNELSCALE);
+        cand = makeRandomCandidatesRF(RAND_N_TRIALS, RAND_NUM_TREES_SET, RAND_MIN_LEAF_SET, RAND_NUM_PRED_SET, nFeat);
     end
 
     % (2) 후보별 CELL-CV(mean-fold) 평가
     bestScore = inf;
     bestCand = cand(1);
     bestDetail = struct();
-    noImprove = 0;
 
     for ci = 1:numel(cand)
         c0 = cand(ci);
 
-        [cvScore, cvDetail] = evalCellCV_SVR_meanfold( ...
+        [cvScore, cvDetail] = evalCellCV_RF_meanfold( ...
             X_tv, y_tv, c_tv, cv_cells, fold_id_of_cell, K, ...
-            c0.Kernel, c0.C, c0.Epsilon, c0.KernelScale, SVR_STANDARDIZE, TUNE_METRIC, nFeat);
+            c0.NumTrees, c0.MinLeafSize, c0.NumPredictorsToSample);
 
         if ~isfinite(cvScore)
             continue;
         end
 
-        if cvScore < bestScore - EARLYSTOP_MIN_IMPROVE
+        if cvScore < bestScore
             bestScore = cvScore;
             bestCand = c0;
             bestDetail = cvDetail;
-            noImprove = 0;
-        else
-            noImprove = noImprove + 1;
-        end
-
-        if EARLYSTOP_ENABLE && TUNE_MODE=="random" && noImprove >= EARLYSTOP_PATIENCE
-            fprintf('  [EarlyStop] %d trials no improvement → stop search (best %s=%.4f)\n', ...
-                EARLYSTOP_PATIENCE, TUNE_METRIC, bestScore);
-            break;
         end
     end
 
-    fprintf('  [BEST by CELL-CV(mean)] Kernel=%s, C=%.4g, eps=%.4g, KS=%s, %s=%.4f\n', ...
-        bestCand.Kernel, bestCand.C, bestCand.Epsilon, ks2str(bestCand.KernelScale), TUNE_METRIC, bestScore);
+    fprintf('  [BEST by CELL-CV(mean)] NumTrees=%d, MinLeaf=%d, NumPredictors=%s, RMSE=%.4f\n', ...
+        bestCand.NumTrees, bestCand.MinLeafSize, pred2str(bestCand.NumPredictorsToSample), bestScore);
 
     % (3) Final 모델 학습
-    mdl = fitrsvm(X_tv, y_tv, ...
-        'KernelFunction', bestCand.Kernel, ...
-        'Standardize', SVR_STANDARDIZE, ...
-        'BoxConstraint', bestCand.C, ...
-        'Epsilon', bestCand.Epsilon, ...
-        'KernelScale', bestCand.KernelScale);
+    mdl = trainRF(X_tv, y_tv, bestCand.NumTrees, bestCand.MinLeafSize, bestCand.NumPredictorsToSample);
 
-    yhat_tv = predict(mdl, X_tv);
+    yhat_tv = predictRF(mdl, X_tv);
     tv.RMSE = sqrt(mean((y_tv - yhat_tv).^2));
-    tv.MAE  = mean(abs(y_tv - yhat_tv));
     tv.R2   = calcR2(y_tv, yhat_tv);
 
     % (4) Test 평가
-    te = struct('RMSE',nan,'MAE',nan,'R2',nan);
+    te = struct('RMSE',nan,'R2',nan);
     yhat_te = [];
     if size(X_te,1) >= 2
-        yhat_te = predict(mdl, X_te);
+        yhat_te = predictRF(mdl, X_te);
         te.RMSE = sqrt(mean((y_te - yhat_te).^2));
-        te.MAE  = mean(abs(y_te - yhat_te));
         te.R2   = calcR2(y_te, yhat_te);
-        fprintf('  [TEST] R2=%.4f RMSE=%.4f MAE=%.4f\n', te.R2, te.RMSE, te.MAE);
+        fprintf('  [TEST] R2=%.4f RMSE=%.4f\n', te.R2, te.RMSE);
     else
         fprintf('  [TEST] test 샘플 부족/없음 → 스킵\n');
     end
 
     % (5) 저장
     results.(tname).best = bestCand;
-    results.(tname).cv = bestDetail;              % mean-fold CV detail
+    results.(tname).cv = bestDetail;
     results.(tname).trainval.metrics = tv;
     results.(tname).test.metrics = te;
     results.(tname).mdl = mdl;
@@ -408,7 +381,7 @@ for tt = 1:numel(target_active)
     results.(tname).test.load_id = load_id(idx_test);
 
     % ---- plot: Train/Val + Test ----
-    fig_all = figure('Color','w','Name',sprintf('SVR_ALL_%s',tname));
+    fig_all = figure('Color','w','Name',sprintf('RF_ALL_%s',tname));
     hold on; grid on;
 
     h_tv = scatter(y_tv, yhat_tv, 30, 'filled', ...
@@ -431,8 +404,7 @@ for tt = 1:numel(target_active)
     xlabel(sprintf('True %s', tname));
     ylabel(sprintf('Pred %s', tname));
 
-    % mean-fold CV 결과를 타이틀에 표기
-    cvStr = sprintf('CV(mean): R2=%.3f RMSE=%.3f', bestDetail.R2_mean, bestDetail.RMSE_mean);
+    cvStr = sprintf('CV(mean): RMSE=%.3f', bestDetail.RMSE_mean);
 
     if numel(yhat_te) >= 2
         title(sprintf('%s | Train/Val: R2=%.3f RMSE=%.3f | %s | Test: R2=%.3f RMSE=%.3f', ...
@@ -450,8 +422,8 @@ for tt = 1:numel(target_active)
         legend([h_tv h_te], {'Train/Val','Test'}, 'Location','best');
     end
 
-    exportgraphics(fig_all, fullfile(save_path, sprintf('SVR_ALL_%s.png', tname)), 'Resolution', 220);
-    savefig(fig_all, fullfile(save_path, sprintf('SVR_ALL_%s.fig', tname)));
+    exportgraphics(fig_all, fullfile(save_path, sprintf('RF_ALL_%s.png', tname)), 'Resolution', 220);
+    savefig(fig_all, fullfile(save_path, sprintf('RF_ALL_%s.fig', tname)));
 end
 
 
@@ -464,10 +436,10 @@ N_TrainVal = []; N_Test = [];
 for ii = 1:numel(target_names)
     tname = target_names{ii};
     rr = results.(tname);
-    Model(end+1,1) = "SVR";
+    Model(end+1,1) = "RF";
     Target(end+1,1) = string(tname);
-    Hyperparameters(end+1,1) = sprintf('Kernel=%s, C=%.4g, epsilon=%.4g, KernelScale=%s', ...
-        rr.best.Kernel, rr.best.C, rr.best.Epsilon, ks2str(rr.best.KernelScale));
+    Hyperparameters(end+1,1) = sprintf('NumTrees=%d, MinLeafSize=%d, NumPredictorsToSample=%s', ...
+        rr.best.NumTrees, rr.best.MinLeafSize, pred2str(rr.best.NumPredictorsToSample));
     Train_RMSE(end+1,1) = rr.trainval.metrics.RMSE;
     CV_RMSE(end+1,1) = rr.cv.RMSE_mean;
     Test_RMSE(end+1,1) = rr.test.metrics.RMSE;
@@ -478,18 +450,17 @@ for ii = 1:numel(target_names)
     N_Test(end+1,1) = numel(rr.test.y_true);
 end
 summary_tbl = table(Model, Target, Hyperparameters, Train_RMSE, CV_RMSE, Test_RMSE, Train_R2, CV_R2, Test_R2, N_TrainVal, N_Test);
-writetable(summary_tbl, fullfile(save_path, 'SVR_summary_RMSE.csv'));
+writetable(summary_tbl, fullfile(save_path, 'RF_summary_RMSE.csv'));
 
 %% ── 저장 --------------------------------------------------------------
-save(fullfile(save_path, 'SVR_results_cellSplit_CV_meanfold.mat'), ...
+save(fullfile(save_path, 'RF_results_cellSplit_CV_meanfold.mat'), ...
     'results', 'X', 'feat_names', 'cell_names', 'SOC_use', 'pNames_2RC', ...
     'LOAD_FEAT_STR', 'TEST_CELL_ID_STR', 'K_FOLD', 'TEMP_list', ...
     'load_id', 'cell_id', 'load_feat', ...
-    'TUNE_MODE','RAND_N_TRIALS','RAND_KERNEL_SET','TUNE_METRIC', ...
-    'SVR_STANDARDIZE','EARLYSTOP_ENABLE','EARLYSTOP_PATIENCE','EARLYSTOP_MIN_IMPROVE', ...
+    'TUNE_MODE','RAND_N_TRIALS','RAND_NUM_TREES_SET','RAND_MIN_LEAF_SET','RAND_NUM_PRED_SET', ...
     'RANDOM_SEED','summary_tbl');
 
-disp('완료: SVR CELL-split + CELL-level CV(mean-fold) + (random search 옵션) + TEST 평가 저장');
+disp('완료: RF CELL-split + CELL-level CV(mean-fold) + random search + TEST 평가 저장');
 
 %% ========================= helper functions ============================
 
@@ -539,44 +510,35 @@ sst = sum((y - mean(y)).^2);
 if sst <= eps, r2 = NaN; else, r2 = 1 - ssr/sst; end
 end
 
-function s = ks2str(ks)
-if ischar(ks) || isstring(ks)
-    s = char(ks);
-else
-    s = sprintf('%.4g', ks);
-end
-end
-
-function cand = makeRandomCandidates(N, kernelSet, logC, logEps, logKS, allowAutoKS)
-cand = repmat(struct('Kernel','gaussian','C',1,'Epsilon',0.1,'KernelScale','auto'), N, 1);
+function cand = makeRandomCandidatesRF(N, numTreesSet, minLeafSet, numPredSet, nFeat)
+cand = repmat(struct('NumTrees',100,'MinLeafSize',1,'NumPredictorsToSample','all'), N, 1);
 for i = 1:N
-    ker = kernelSet{randi(numel(kernelSet))};
-    C   = 10^(logC(1) + (logC(2)-logC(1))*rand());
-    eps = 10^(logEps(1) + (logEps(2)-logEps(1))*rand());
+    nt = numTreesSet(randi(numel(numTreesSet)));
+    ml = minLeafSet(randi(numel(minLeafSet)));
+    npStr = numPredSet(randi(numel(numPredSet)));
 
-    if strcmpi(ker,'gaussian')
-        if allowAutoKS && rand() < 0.3
-            KS = 'auto';
-        else
-            KS = 10^(logKS(1) + (logKS(2)-logKS(1))*rand());
-        end
+    if npStr == "all"
+        np = 'all';
     else
-        KS = 'auto';
+        np = str2double(npStr);
+        if isnan(np) || np < 1
+            np = 'all';
+        else
+            np = min(round(np), nFeat);
+        end
     end
 
-    cand(i).Kernel = ker;
-    cand(i).C = C;
-    cand(i).Epsilon = eps;
-    cand(i).KernelScale = KS;
+    cand(i).NumTrees = nt;
+    cand(i).MinLeafSize = ml;
+    cand(i).NumPredictorsToSample = np;
 end
 end
 
-function [score, detail] = evalCellCV_SVR_meanfold(X, y, c, cv_cells, fold_id_of_cell, K, kernel, C, eps0, ks, doStd, metric, nFeat)
+function [score, detail] = evalCellCV_RF_meanfold(X, y, c, cv_cells, fold_id_of_cell, K, numTrees, minLeaf, numPred)
 n = size(X,1);
 yhat = nan(n,1);
 
 fold_RMSE = nan(K,1);
-fold_MAE  = nan(K,1);
 fold_R2   = nan(K,1);
 
 for k = 1:K
@@ -584,24 +546,17 @@ for k = 1:K
     is_val = ismember(c, val_cells);
     is_tr  = ~is_val;
 
-    if nnz(is_val) < 2 || nnz(is_tr) < nFeat + 1
+    if nnz(is_val) < 1 || nnz(is_tr) < 2
         continue;
     end
 
     try
-        mdl = fitrsvm(X(is_tr,:), y(is_tr), ...
-            'KernelFunction', kernel, ...
-            'Standardize', doStd, ...
-            'BoxConstraint', C, ...
-            'Epsilon', eps0, ...
-            'KernelScale', ks);
-
-        yhat_k = predict(mdl, X(is_val,:));
+        mdl = trainRF(X(is_tr,:), y(is_tr), numTrees, minLeaf, numPred);
+        yhat_k = predictRF(mdl, X(is_val,:));
         yhat(is_val) = yhat_k;
 
         res = y(is_val) - yhat_k;
         fold_RMSE(k) = sqrt(mean(res.^2));
-        fold_MAE(k)  = mean(abs(res));
         fold_R2(k)   = calcR2(y(is_val), yhat_k);
     catch
         continue;
@@ -610,25 +565,58 @@ end
 
 detail = struct();
 detail.K = K;
-detail.kernel = kernel;
-detail.C = C;
-detail.epsilon = eps0;
-detail.kernelscale = ks;
+detail.NumTrees = numTrees;
+detail.MinLeafSize = minLeaf;
+detail.NumPredictorsToSample = numPred;
 detail.y_pred = yhat;
 
 detail.fold_RMSE = fold_RMSE;
-detail.fold_MAE  = fold_MAE;
 detail.fold_R2   = fold_R2;
 
 detail.RMSE_mean = mean(fold_RMSE,'omitnan');
-detail.MAE_mean  = mean(fold_MAE,'omitnan');
 detail.R2_mean   = mean(fold_R2,'omitnan');
 
-% score 선택 (mean-fold 기준)
-if metric == "MAE"
-    score = detail.MAE_mean;
+score = detail.RMSE_mean;
+end
+
+function mdl = trainRF(X, y, numTrees, minLeaf, numPred)
+% TreeBagger regression RF
+if ischar(numPred) || isstring(numPred)
+    if strcmpi(char(numPred), 'all')
+        mdl = TreeBagger(numTrees, X, y, ...
+            'Method','regression', ...
+            'MinLeafSize', minLeaf, ...
+            'OOBPrediction','off');
+    else
+        np = str2double(numPred);
+        mdl = TreeBagger(numTrees, X, y, ...
+            'Method','regression', ...
+            'MinLeafSize', minLeaf, ...
+            'NumPredictorsToSample', np, ...
+            'OOBPrediction','off');
+    end
 else
-    score = detail.RMSE_mean;
+    mdl = TreeBagger(numTrees, X, y, ...
+        'Method','regression', ...
+        'MinLeafSize', minLeaf, ...
+        'NumPredictorsToSample', numPred, ...
+        'OOBPrediction','off');
+end
+end
+
+function yhat = predictRF(mdl, X)
+yhat = predict(mdl, X);
+if iscell(yhat)
+    yhat = str2double(yhat);
+end
+yhat = yhat(:);
+end
+
+function s = pred2str(x)
+if ischar(x) || isstring(x)
+    s = char(x);
+else
+    s = sprintf('%d', x);
 end
 end
 

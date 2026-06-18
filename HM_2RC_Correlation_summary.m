@@ -24,16 +24,16 @@
 clear; clc; close all;
 
 %% ── 설정(토글) ---------------------------------------------------------
-SOC_use = [70];
-SHOW_P_IN_HEATMAP = false;   % true: r,p 둘 다 표시 / false: r만 표시
+SOC_use = [70 50];
+SHOW_P_IN_HEATMAP = true;   % true: r,p 둘 다 표시 / false: r만 표시
 
 % 사용할 주행부하 입력(공백/콤마/세미콜론 지원)
 % 'US06','UDDS','HWFET','WLTP','CITY1','CITY2','HW1','HW2'
 LOAD_USE_STR = "US06";
 
 % 온도 리스트 분리
-TEMP_list_load   = [20 10 0];          % 주행부하 2RC용
-TEMP_list_scalar = [45 35 20 10 0];    % DCIR / Power / 기타 스칼라용
+TEMP_list_load   = [20];          % 주행부하 2RC용 20 10 0
+TEMP_list_scalar = [20];    % DCIR / Power / 기타 스칼라용 45 35 20 10 0
 
 % 스칼라 활성화 토글
 USE_DELTA            = false;
